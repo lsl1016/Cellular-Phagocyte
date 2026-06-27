@@ -1,0 +1,1302 @@
+# 客户端页面与场景流转设计文档
+
+## 1. 文档信息
+
+| 项目       | 内容                                            |
+| ---------- | ----------------------------------------------- |
+| 文档名称   | 客户端页面与场景流转设计文档                    |
+| 所属产品   | 吞噬细胞                                        |
+| 客户端类型 | Cocos Creator 3.x 横屏 H5 客户端                |
+| 技术栈     | Cocos Creator 3.x + TypeScript                  |
+| 运行形态   | H5 网页优先，后续支持小游戏 / App               |
+| 通信方式   | HTTP + WebSocket                                |
+| 文档定位   | 客户端页面规划 + 场景流转设计                   |
+| 当前目标   | 明确 MVP 阶段需要实现的页面、跳转关系和异常流转 |
+
+------
+
+# 2. 设计目标
+
+## 2.1 产品目标
+
+客户端页面设计需要支持玩家完成完整游戏闭环：
+
+```text
+启动游戏
+  ↓
+登录
+  ↓
+进入大厅
+  ↓
+开始匹配
+  ↓
+进入对战
+  ↓
+完成一局
+  ↓
+查看结算
+  ↓
+返回大厅 / 再来一局
+```
+
+MVP 阶段需要优先保证：
+
+1. 页面链路清晰。
+2. 玩家知道当前处于哪个状态。
+3. 匹配、入房、对战、结算都有明确反馈。
+4. 网络异常和失败状态有兜底页面。
+5. 页面结构能支撑后续战绩、排行榜、任务等扩展。
+
+------
+
+## 2.2 技术目标
+
+| 目标           | 说明                                           |
+| -------------- | ---------------------------------------------- |
+| 场景职责清晰   | 每个 Cocos Scene 只负责一个主要阶段            |
+| UI 面板可复用  | Toast、Loading、确认弹窗、重连遮罩统一管理     |
+| 页面流转可控   | 统一由 SceneManager / UIManager 控制跳转       |
+| 支持横屏适配   | 以 1920 x 1080 作为设计基准                    |
+| 网络异常可恢复 | 登录失败、匹配失败、入房失败、断线等都有处理   |
+| 支持后续扩展   | 排行榜、战绩、任务、商城、设置等页面可平滑加入 |
+
+------
+
+# 3. 页面与场景总览
+
+## 3.1 MVP 必做场景
+
+| 场景            | 页面名称 | 是否 MVP 必做 | 说明                     |
+| --------------- | -------- | ------------- | ------------------------ |
+| BootScene       | 启动页   | 是            | 初始化配置、资源、登录态 |
+| LoginScene      | 登录页   | 是            | 游客登录                 |
+| LobbyScene      | 大厅页   | 是            | 用户信息、开始游戏入口   |
+| MatchScene      | 匹配页   | 是            | 展示匹配状态、取消匹配   |
+| GameScene       | 对战页   | 是            | 实时对战主场景           |
+| SettlementScene | 结算页   | 是            | 展示本局结果             |
+
+------
+
+## 3.2 P1 可后置场景
+
+| 场景         | 页面名称     | 当前建议                         |
+| ------------ | ------------ | -------------------------------- |
+| RecordScene  | 战绩页       | P1                               |
+| RankScene    | 全服排行榜页 | P1                               |
+| TaskScene    | 任务页       | P1                               |
+| SettingScene | 设置页       | P1                               |
+| LoadingScene | 独立加载页   | 可选，MVP 可用 LoadingPanel 代替 |
+
+------
+
+## 3.3 当前阶段不做场景
+
+| 场景        | 页面名称 | 当前建议 |
+| ----------- | -------- | -------- |
+| ShopScene   | 商城页   | 暂不实现 |
+| SkinScene   | 皮肤页   | 暂不实现 |
+| FriendScene | 好友页   | 暂不实现 |
+| TeamScene   | 组队页   | 暂不实现 |
+| ReplayScene | 回放页   | 暂不实现 |
+| WatchScene  | 观战页   | 暂不实现 |
+| SeasonScene | 赛季页   | 暂不实现 |
+| MailScene   | 邮件页   | 暂不实现 |
+
+------
+
+# 4. 客户端主流程
+
+## 4.1 MVP 主流程
+
+```text
+BootScene
+  ↓
+LoginScene
+  ↓
+LobbyScene
+  ↓
+MatchScene
+  ↓
+GameScene
+  ↓
+SettlementScene
+  ↓
+LobbyScene
+```
+
+------
+
+## 4.2 自动登录流程
+
+```text
+启动游戏
+  ↓
+BootScene 初始化
+  ↓
+读取本地 accessToken
+  ↓
+accessToken 存在？
+  ├── 是 → 请求 /api/users/me 校验
+  │       ├── 成功 → LobbyScene
+  │       └── 失败 → LoginScene
+  └── 否 → LoginScene
+```
+
+------
+
+## 4.3 对局流程
+
+```text
+LobbyScene 点击开始游戏
+  ↓
+请求 /api/match/start
+  ↓
+进入 MatchScene
+  ↓
+轮询 /api/match/status
+  ↓
+匹配成功
+  ↓
+获得 roomId / wsUrl / enterToken
+  ↓
+进入 GameScene
+  ↓
+建立 WebSocket
+  ↓
+发送 ENTER_ROOM
+  ↓
+收到 ENTER_ROOM_RESULT
+  ↓
+发送 READY
+  ↓
+收到 GAME_START
+  ↓
+开始对战
+  ↓
+收到 GAME_END / SETTLEMENT_RESULT
+  ↓
+进入 SettlementScene
+```
+
+------
+
+# 5. 横屏布局基准
+
+## 5.1 设计分辨率
+
+推荐使用：
+
+```text
+1920 x 1080
+```
+
+或者：
+
+```text
+1600 x 900
+```
+
+MVP 建议直接按：
+
+```text
+1920 x 1080 横屏设计
+```
+
+------
+
+## 5.2 屏幕方向处理
+
+H5 场景下不能保证所有浏览器都能强制横屏，因此需要检测屏幕方向。
+
+竖屏时展示提示：
+
+```text
+请旋转手机，横屏体验更佳
+```
+
+横屏后恢复游戏画面。
+
+------
+
+## 5.3 安全区适配
+
+需要考虑：
+
+1. 手机刘海屏。
+2. 浏览器地址栏。
+3. 小程序 WebView 边界。
+4. 不同屏幕比例。
+5. 平板和桌面浏览器。
+
+推荐 UI 按锚点布局：
+
+| 区域         | 锚点     |
+| ------------ | -------- |
+| 用户信息     | 左上     |
+| 资产信息     | 顶部居中 |
+| 设置按钮     | 右上     |
+| 左侧活动入口 | 左侧居中 |
+| 主要功能卡片 | 中心区域 |
+| 开始游戏按钮 | 中下     |
+| 底部导航     | 底部拉伸 |
+| 对战摇杆     | 左下     |
+| 技能按钮     | 右下     |
+| 局内排行榜   | 右上     |
+
+------
+
+# 6. BootScene 启动页设计
+
+## 6.1 页面职责
+
+BootScene 是客户端启动入口，负责：
+
+1. 初始化全局配置。
+2. 初始化日志模块。
+3. 初始化网络模块。
+4. 初始化资源管理器。
+5. 加载基础资源。
+6. 检查本地登录态。
+7. 判断进入登录页或大厅页。
+8. 后续支持版本检查。
+
+------
+
+## 6.2 页面元素
+
+MVP 可展示：
+
+| 元素       | 说明           |
+| ---------- | -------------- |
+| 游戏 Logo  | 吞噬细胞       |
+| 加载进度条 | 展示初始化进度 |
+| 加载文案   | 正在加载资源   |
+| 横屏提示   | 竖屏时展示     |
+
+示例文案：
+
+```text
+正在加载资源...
+正在连接服务器...
+正在检查登录状态...
+```
+
+------
+
+## 6.3 进入条件
+
+客户端启动后默认进入 BootScene。
+
+------
+
+## 6.4 出口流转
+
+| 条件               | 跳转         |
+| ------------------ | ------------ |
+| 本地 token 有效    | LobbyScene   |
+| 本地 token 无效    | LoginScene   |
+| 初始化失败         | 显示重试按钮 |
+| 版本过低，后续支持 | 强更提示页   |
+
+------
+
+## 6.5 依赖接口
+
+| 接口                             | 用途           |
+| -------------------------------- | -------------- |
+| GET /api/users/me                | 校验登录态     |
+| GET /api/config/client，后续支持 | 拉取客户端配置 |
+
+------
+
+# 7. LoginScene 登录页设计
+
+## 7.1 页面职责
+
+LoginScene 负责玩家进入游戏前的身份初始化。
+
+MVP 阶段只做游客登录。
+
+------
+
+## 7.2 页面元素
+
+| 元素           | 说明           |
+| -------------- | -------------- |
+| 游戏标题       | 吞噬细胞       |
+| 主视觉角色     | 黑球或默认球体 |
+| 游客进入按钮   | MVP 主入口     |
+| 登录中 Loading | 防止重复点击   |
+| 用户协议提示   | 后续支持       |
+| 隐私政策提示   | 后续支持       |
+
+------
+
+## 7.3 用户操作
+
+| 操作         | 结果                   |
+| ------------ | ---------------------- |
+| 点击游客进入 | 调用游客登录接口       |
+| 登录成功     | 保存 token，进入大厅   |
+| 登录失败     | Toast 提示失败         |
+| 重复点击     | 按钮禁用，避免重复请求 |
+
+------
+
+## 7.4 依赖接口
+
+```http
+POST /api/auth/guest-login
+```
+
+------
+
+## 7.5 出口流转
+
+```text
+LoginScene
+  ↓ 游客登录成功
+LobbyScene
+```
+
+失败时留在 LoginScene。
+
+------
+
+# 8. LobbyScene 大厅页设计
+
+## 8.1 页面职责
+
+LobbyScene 是玩家进入游戏后的主页面。
+
+负责：
+
+1. 展示用户资料。
+2. 展示金币、经验、等级。
+3. 提供开始游戏入口。
+4. 提供排行榜、战绩、任务、设置等入口。
+5. 后续承载活动、商城、皮肤、好友入口。
+
+------
+
+## 8.2 页面结构
+
+大厅页采用横屏游戏大厅布局。
+
+```text
+LobbyScene
+├── BackgroundLayer
+├── CharacterDisplay
+├── UserInfoPanel
+├── AssetBar
+├── MainModePanel
+├── StartGameButton
+├── RightEntryPanel
+├── LeftEntryPanel
+└── BottomTabBar
+```
+
+------
+
+## 8.3 页面区域说明
+
+| 区域     | 内容                                         |
+| -------- | -------------------------------------------- |
+| 左上角   | 头像、昵称、等级、段位，段位后续支持         |
+| 顶部中间 | 金币、钻石，钻石后续支持                     |
+| 右上角   | 设置、消息、好友，后续支持                   |
+| 左侧     | 活动、每日任务、商城入口，后续支持           |
+| 中间     | 经典模式卡片                                 |
+| 下方中间 | 开始游戏按钮                                 |
+| 右侧     | 排行榜、战绩、设置入口                       |
+| 底部     | 大厅、球球、皮肤、好友、背包等 Tab，后续支持 |
+| 左中区域 | 当前球体角色展示                             |
+
+------
+
+## 8.4 MVP 页面内容
+
+MVP 必须展示：
+
+1. 昵称。
+2. 等级。
+3. 金币。
+4. 经典模式。
+5. 开始游戏按钮。
+6. 排行榜入口，可先做占位。
+7. 战绩入口，可先做占位。
+8. 设置入口，可先做占位。
+
+MVP 暂不实现：
+
+1. 商城。
+2. 皮肤。
+3. 好友。
+4. 背包。
+5. 活动。
+6. 邮件。
+7. 赛季。
+8. 段位详情。
+
+------
+
+## 8.5 用户操作
+
+| 操作         | 结果                 |
+| ------------ | -------------------- |
+| 点击开始游戏 | 调用开始匹配         |
+| 点击排行榜   | 进入 RankScene，P1   |
+| 点击战绩     | 进入 RecordScene，P1 |
+| 点击任务     | 进入 TaskScene，P1   |
+| 点击设置     | 打开设置弹窗，P1     |
+| 点击商城     | 暂不开放             |
+| 点击皮肤     | 暂不开放             |
+
+------
+
+## 8.6 依赖接口
+
+| 接口                                   | 用途               |
+| -------------------------------------- | ------------------ |
+| GET /api/users/me                      | 查询用户资料和资产 |
+| POST /api/match/start                  | 开始匹配           |
+| GET /api/tasks/redpoint，P1            | 查询任务红点       |
+| GET /api/records/latest-settlement，P1 | 查询最近结算       |
+
+------
+
+## 8.7 出口流转
+
+```text
+点击开始游戏
+  ↓
+POST /api/match/start 成功
+  ↓
+MatchScene
+```
+
+失败时：
+
+```text
+Toast: 开始匹配失败，请稍后重试
+```
+
+------
+
+# 9. MatchScene 匹配页设计
+
+## 9.1 页面职责
+
+MatchScene 用于展示玩家匹配状态。
+
+负责：
+
+1. 展示匹配中状态。
+2. 展示已等待时间。
+3. 支持取消匹配。
+4. 查询匹配结果。
+5. 匹配成功后进入 GameScene。
+
+------
+
+## 9.2 页面元素
+
+| 元素     | 说明                       |
+| -------- | -------------------------- |
+| 标题     | 经典模式匹配中             |
+| 动效     | 雷达扫描 / 球体旋转        |
+| 等待时间 | 已等待 N 秒                |
+| 状态文案 | 正在寻找玩家               |
+| 取消按钮 | 取消匹配                   |
+| 匹配阶段 | 入队、查找房间、分配服务器 |
+| Loading  | 匹配成功后进入对战前展示   |
+
+------
+
+## 9.3 匹配状态
+
+| 状态     | 页面表现           |
+| -------- | ------------------ |
+| MATCHING | 正在匹配           |
+| MATCHED  | 匹配成功，进入房间 |
+| CANCELED | 已取消，返回大厅   |
+| TIMEOUT  | 匹配超时           |
+| FAILED   | 匹配失败           |
+
+------
+
+## 9.4 查询方式
+
+MVP 推荐轮询：
+
+```text
+每 1 秒请求一次 /api/match/status
+```
+
+后续可以改成 WebSocket 或 SSE 推送。
+
+------
+
+## 9.5 用户操作
+
+| 操作         | 结果                 |
+| ------------ | -------------------- |
+| 点击取消匹配 | 调用取消匹配接口     |
+| 匹配成功     | 进入 GameScene       |
+| 匹配失败     | 展示错误并返回大厅   |
+| 匹配超时     | 提示超时，可重新匹配 |
+
+------
+
+## 9.6 依赖接口
+
+| 接口                   | 用途                             |
+| ---------------------- | -------------------------------- |
+| POST /api/match/start  | 开始匹配，通常由 LobbyScene 调用 |
+| GET /api/match/status  | 查询匹配状态                     |
+| POST /api/match/cancel | 取消匹配                         |
+
+------
+
+## 9.7 出口流转
+
+匹配成功：
+
+```text
+MatchScene
+  ↓
+GameScene
+```
+
+取消匹配：
+
+```text
+MatchScene
+  ↓
+LobbyScene
+```
+
+匹配失败：
+
+```text
+MatchScene
+  ↓
+提示失败
+  ↓
+LobbyScene
+```
+
+------
+
+# 10. GameScene 对战页设计
+
+## 10.1 页面职责
+
+GameScene 是实时对战主场景。
+
+负责：
+
+1. 连接 Game Server。
+2. 入房认证。
+3. Ready。
+4. 展示地图。
+5. 展示玩家球体。
+6. 展示食物。
+7. 采集移动输入。
+8. 发送 MOVE / SPLIT / EJECT。
+9. 接收状态快照。
+10. 展示局内排行榜。
+11. 处理游戏结束。
+12. 处理断线重连，P1。
+
+------
+
+## 10.2 场景结构
+
+```text
+GameScene
+├── MapLayer
+├── FoodLayer
+├── EjectedMassLayer
+├── VirusLayer，后续支持
+├── PlayerLayer
+├── EffectLayer
+├── UILayer
+│   ├── GameHUD
+│   ├── RankPanel
+│   ├── Joystick
+│   ├── SkillButtons
+│   ├── ReconnectPanel
+│   └── ToastPanel
+└── Camera
+```
+
+------
+
+## 10.3 页面元素
+
+| 元素       | 说明           |
+| ---------- | -------------- |
+| 地图背景   | 对战地图       |
+| 玩家球体   | 自己和其他玩家 |
+| 食物       | 可吞噬食物     |
+| 虚拟摇杆   | 控制移动       |
+| 分裂按钮   | P1，可先预留   |
+| 吐球按钮   | P1，可先预留   |
+| 局内排行榜 | Top N          |
+| 剩余时间   | 对局倒计时     |
+| 当前质量   | 当前玩家质量   |
+| 网络延迟   | P1             |
+| 重连遮罩   | P1             |
+| 小地图     | 后续支持       |
+
+------
+
+## 10.4 进入流程
+
+```text
+进入 GameScene
+  ↓
+读取 roomId / wsUrl / enterToken
+  ↓
+建立 WebSocket
+  ↓
+发送 ENTER_ROOM
+  ↓
+收到 ENTER_ROOM_RESULT
+  ↓
+加载对战资源
+  ↓
+发送 READY
+  ↓
+收到 GAME_START
+  ↓
+开启输入和渲染
+```
+
+------
+
+## 10.5 对战中流程
+
+```text
+玩家拖动摇杆
+  ↓
+InputManager 计算方向
+  ↓
+按固定频率发送 MOVE
+  ↓
+服务端 Tick 处理
+  ↓
+客户端收到 ROOM_SNAPSHOT
+  ↓
+更新 GameState
+  ↓
+EntityManager 更新对象
+  ↓
+画面刷新
+```
+
+------
+
+## 10.6 WebSocket 消息依赖
+
+| 消息              | 说明               |
+| ----------------- | ------------------ |
+| ENTER_ROOM        | 入房认证           |
+| ENTER_ROOM_RESULT | 入房结果           |
+| READY             | 客户端资源加载完成 |
+| GAME_START        | 对局开始           |
+| MOVE              | 移动输入           |
+| SPLIT             | 分裂，P1           |
+| EJECT             | 吐球，P1           |
+| ROOM_SNAPSHOT     | 状态快照           |
+| RANK_UPDATE       | 局内排行榜         |
+| GAME_END          | 游戏结束           |
+| SETTLEMENT_RESULT | 结算结果           |
+| PING / PONG       | 心跳               |
+
+------
+
+## 10.7 出口流转
+
+正常结束：
+
+```text
+GameScene
+  ↓ 收到 SETTLEMENT_RESULT
+SettlementScene
+```
+
+WebSocket 断开，MVP 简化：
+
+```text
+GameScene
+  ↓
+提示连接断开
+  ↓
+LobbyScene 或尝试查询结算
+```
+
+P1 断线重连：
+
+```text
+GameScene
+  ↓ 断线
+ReconnectPanel
+  ↓ 重连成功
+GameScene 恢复
+```
+
+------
+
+# 11. SettlementScene 结算页设计
+
+## 11.1 页面职责
+
+SettlementScene 展示本局最终结果。
+
+负责：
+
+1. 展示排名。
+2. 展示得分。
+3. 展示吞噬数。
+4. 展示存活时间。
+5. 展示金币和经验奖励。
+6. 支持返回大厅。
+7. 支持再来一局。
+
+------
+
+## 11.2 页面元素
+
+| 元素         | 说明           |
+| ------------ | -------------- |
+| 本局排名     | 第 N 名        |
+| 总人数       | 本局总人数     |
+| 最终得分     | finalScore     |
+| 最大质量     | maxMass        |
+| 吞噬玩家数   | eatPlayerCount |
+| 吞噬食物数   | eatFoodCount   |
+| 存活时间     | aliveSeconds   |
+| 金币奖励     | coinReward     |
+| 经验奖励     | expReward      |
+| 返回大厅按钮 | 回 LobbyScene  |
+| 再来一局按钮 | 重新匹配       |
+
+------
+
+## 11.3 数据来源
+
+优先来自 WebSocket：
+
+```text
+SETTLEMENT_RESULT
+```
+
+如果没有收到，则通过 HTTP 查询：
+
+```http
+GET /api/settlements/{roomId}/me
+```
+
+或者：
+
+```http
+GET /api/records/latest-settlement
+```
+
+------
+
+## 11.4 用户操作
+
+| 操作     | 结果                          |
+| -------- | ----------------------------- |
+| 返回大厅 | 进入 LobbyScene，刷新用户资产 |
+| 再来一局 | 请求开始匹配，进入 MatchScene |
+| 查看战绩 | 进入 RecordScene，P1          |
+| 分享战绩 | 暂不实现                      |
+
+------
+
+## 11.5 出口流转
+
+```text
+SettlementScene
+  ├── 返回大厅 → LobbyScene
+  └── 再来一局 → MatchScene
+```
+
+------
+
+# 12. RecordScene 战绩页设计，P1
+
+## 12.1 页面职责
+
+RecordScene 用于展示历史对局。
+
+P1 实现，不进入 MVP 第一阶段。
+
+------
+
+## 12.2 页面内容
+
+1. 历史战绩列表。
+2. 对局时间。
+3. 排名。
+4. 得分。
+5. 奖励。
+6. 点击查看详情。
+
+------
+
+## 12.3 依赖接口
+
+| 接口                      | 用途         |
+| ------------------------- | ------------ |
+| GET /api/records          | 查询战绩列表 |
+| GET /api/records/{roomId} | 查询战绩详情 |
+
+------
+
+# 13. RankScene 全服排行榜页设计，P1
+
+## 13.1 页面职责
+
+RankScene 用于展示全服排行榜。
+
+P1 实现，不进入 MVP 第一阶段。
+
+------
+
+## 13.2 页面内容
+
+1. 日榜。
+2. 周榜。
+3. 最高分榜。
+4. Top N。
+5. 我的排名。
+
+------
+
+## 13.3 依赖接口
+
+| 接口                  | 用途         |
+| --------------------- | ------------ |
+| GET /api/ranks        | 查询榜单     |
+| GET /api/ranks/me     | 查询我的排名 |
+| GET /api/ranks/config | 查询榜单配置 |
+
+------
+
+# 14. TaskScene 任务页设计，P1
+
+## 14.1 页面职责
+
+TaskScene 用于展示每日任务、成长任务和成就。
+
+P1 实现，不进入 MVP 第一阶段。
+
+------
+
+## 14.2 页面内容
+
+1. 每日任务。
+2. 成长任务。
+3. 成就。
+4. 任务进度。
+5. 奖励领取。
+
+------
+
+## 14.3 依赖接口
+
+| 接口                           | 用途         |
+| ------------------------------ | ------------ |
+| GET /api/tasks                 | 查询任务列表 |
+| GET /api/achievements          | 查询成就     |
+| POST /api/tasks/{taskId}/claim | 领取奖励     |
+| GET /api/tasks/redpoint        | 查询红点     |
+
+------
+
+# 15. SettingScene / 设置弹窗设计，P1
+
+## 15.1 页面职责
+
+设置可以先做弹窗，不一定独立成 Scene。
+
+------
+
+## 15.2 MVP 可后置内容
+
+1. 音效开关。
+2. 音乐开关。
+3. 画质设置。
+4. 账号信息。
+5. 返回登录。
+6. 客服入口，后续支持。
+
+------
+
+# 16. 通用 UI 组件设计
+
+## 16.1 LoadingPanel
+
+用途：
+
+1. 登录中。
+2. 匹配中。
+3. 入房中。
+4. 加载资源中。
+5. 查询结算中。
+
+------
+
+## 16.2 ToastPanel
+
+用于轻提示：
+
+```text
+登录失败
+匹配失败
+连接断开
+奖励领取成功
+网络异常，请稍后重试
+```
+
+------
+
+## 16.3 ConfirmDialog
+
+用于确认操作：
+
+1. 取消匹配。
+2. 返回大厅。
+3. 退出对局，后续支持。
+4. 重新登录。
+
+------
+
+## 16.4 ReconnectPanel
+
+P1 实现。
+
+展示：
+
+```text
+连接已断开，正在重连...
+```
+
+重连失败时展示：
+
+```text
+重连失败，请返回大厅
+```
+
+------
+
+# 17. 异常流转设计
+
+## 17.1 登录失败
+
+```text
+LoginScene
+  ↓ 游客登录失败
+Toast 提示
+  ↓
+停留 LoginScene
+```
+
+------
+
+## 17.2 Token 失效
+
+```text
+任意接口返回 Token 失效
+  ↓
+清理本地 accessToken
+  ↓
+跳转 LoginScene
+```
+
+------
+
+## 17.3 匹配失败
+
+```text
+MatchScene
+  ↓ 匹配失败
+Toast: 匹配失败，请稍后重试
+  ↓
+LobbyScene
+```
+
+------
+
+## 17.4 入房失败
+
+```text
+GameScene
+  ↓ ENTER_ROOM_RESULT 失败
+Toast: 进入房间失败
+  ↓
+LobbyScene
+```
+
+------
+
+## 17.5 WebSocket 断开
+
+MVP 简化：
+
+```text
+GameScene
+  ↓ WebSocket 断开
+Toast: 连接断开
+  ↓
+查询结算或返回大厅
+```
+
+P1：
+
+```text
+GameScene
+  ↓ WebSocket 断开
+ReconnectPanel
+  ↓ 重连成功
+恢复 GameScene
+  ↓ 重连失败
+LobbyScene / SettlementScene
+```
+
+------
+
+## 17.6 结算结果未收到
+
+```text
+GameScene 收到 GAME_END
+  ↓
+等待 SETTLEMENT_RESULT
+  ↓ 超时
+调用 /api/settlements/{roomId}/me
+  ↓
+成功 → SettlementScene
+处理中 → SettlementScene loading
+失败 → 提示稍后在战绩查看
+```
+
+------
+
+# 18. 页面状态管理
+
+## 18.1 全局状态
+
+建议维护：
+
+```text
+AppState
+├── accessToken
+├── userInfo
+├── userAsset
+├── currentScene
+├── networkStatus
+├── currentRoomId
+├── currentMatchId
+└── currentSettlement
+```
+
+------
+
+## 18.2 对战状态
+
+```text
+BattleState
+├── roomId
+├── selfUserId
+├── roomStatus
+├── tickSeq
+├── serverTime
+├── remainingTime
+├── players
+├── foods
+├── rankList
+└── selfRank
+```
+
+------
+
+## 18.3 页面状态原则
+
+1. 大厅状态和对战状态分开。
+2. 对战结束后清理 BattleState。
+3. 返回大厅后刷新用户资料和资产。
+4. 结算数据保存到 currentSettlement。
+5. 断线重连时保留 roomId 和 reconnectToken。
+
+------
+
+# 19. MVP 页面开发优先级
+
+## 19.1 第一批：必须先做
+
+| 优先级 | 页面            | 说明       |
+| ------ | --------------- | ---------- |
+| P0     | BootScene       | 启动初始化 |
+| P0     | LoginScene      | 游客登录   |
+| P0     | LobbyScene      | 大厅       |
+| P0     | MatchScene      | 匹配       |
+| P0     | GameScene       | 对战       |
+| P0     | SettlementScene | 结算       |
+
+------
+
+## 19.2 第二批：主链路稳定后做
+
+| 优先级 | 页面           | 说明       |
+| ------ | -------------- | ---------- |
+| P1     | RecordScene    | 战绩       |
+| P1     | RankScene      | 全服排行榜 |
+| P1     | TaskScene      | 任务       |
+| P1     | SettingPanel   | 设置       |
+| P1     | ReconnectPanel | 断线重连   |
+
+------
+
+## 19.3 暂不实现
+
+| 页面        | 说明 |
+| ----------- | ---- |
+| ShopScene   | 商城 |
+| SkinScene   | 皮肤 |
+| FriendScene | 好友 |
+| TeamScene   | 组队 |
+| ReplayScene | 回放 |
+| WatchScene  | 观战 |
+| SeasonScene | 赛季 |
+| MailScene   | 邮件 |
+
+------
+
+# 20. 页面流转汇总
+
+## 20.1 正常主链路
+
+```text
+BootScene
+  ↓
+LoginScene
+  ↓
+LobbyScene
+  ↓
+MatchScene
+  ↓
+GameScene
+  ↓
+SettlementScene
+  ↓
+LobbyScene
+```
+
+------
+
+## 20.2 自动登录链路
+
+```text
+BootScene
+  ↓ token 有效
+LobbyScene
+
+BootScene
+  ↓ token 无效
+LoginScene
+```
+
+------
+
+## 20.3 再来一局链路
+
+```text
+SettlementScene
+  ↓ 点击再来一局
+POST /api/match/start
+  ↓
+MatchScene
+```
+
+------
+
+## 20.4 匹配取消链路
+
+```text
+MatchScene
+  ↓ 点击取消
+POST /api/match/cancel
+  ↓
+LobbyScene
+```
+
+------
+
+## 20.5 入房失败链路
+
+```text
+MatchScene
+  ↓ 匹配成功
+GameScene
+  ↓ 入房失败
+LobbyScene
+```
+
+------
+
+## 20.6 结算找回链路，P1
+
+```text
+LobbyScene
+  ↓ 查询 latest-settlement
+发现未查看结算
+  ↓
+SettlementScene / RecordScene
+```
+
+------
+
+# 21. 总结
+
+客户端页面与场景流转的 MVP 核心是：
+
+```text
+启动
+  ↓
+登录
+  ↓
+大厅
+  ↓
+匹配
+  ↓
+对战
+  ↓
+结算
+  ↓
+大厅
+```
+
+MVP 阶段优先完成 6 个页面：
+
+1. BootScene。
+2. LoginScene。
+3. LobbyScene。
+4. MatchScene。
+5. GameScene。
+6. SettlementScene。
+
+P1 阶段再补：
+
+1. 战绩页。
+2. 全服排行榜页。
+3. 任务页。
+4. 设置页。
+5. 断线重连遮罩。
+
+当前阶段不做商城、皮肤、好友、聊天、组队、回放、观战、赛季和邮件。
+先把玩家最核心的一局体验做通，再逐步扩展外围页面。
