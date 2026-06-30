@@ -16,7 +16,7 @@ func sample(roomID, userID string, rank int, score int64) settlement.SettledPlay
 }
 
 func TestListAndGet(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	s.OnSettled(sample("r1", "u1", 1, 100))
 	s.OnSettled(sample("r2", "u1", 3, 80))
 	s.OnSettled(sample("r3", "u2", 1, 200)) // 他人
@@ -42,7 +42,7 @@ func TestListAndGet(t *testing.T) {
 }
 
 func TestSummaryAggregates(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	s.OnSettled(sample("r1", "u1", 1, 100))
 	s.OnSettled(sample("r2", "u1", 3, 80))
 
@@ -65,7 +65,7 @@ func TestSummaryAggregates(t *testing.T) {
 }
 
 func TestPagination(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	for i := 0; i < 25; i++ {
 		s.OnSettled(sample("r"+string(rune('a'+i)), "u1", 1, int64(i)))
 	}

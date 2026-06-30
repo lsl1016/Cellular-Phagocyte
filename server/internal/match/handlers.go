@@ -49,8 +49,8 @@ func (h *Handlers) start(w http.ResponseWriter, r *http.Request) {
 	}
 	e := h.svc.Start(u, req.Mode)
 	httpx.WriteOK(w, map[string]any{
-		"matchId":              e.MatchID(),
-		"status":               e.Status(),
+		"matchId":              e.MatchID,
+		"status":               e.Status,
 		"estimatedWaitSeconds": h.cfg.MaxWaitSeconds,
 		"serverTime":           time.Now().UnixMilli(),
 	})
@@ -85,21 +85,21 @@ func (h *Handlers) status(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusNotFound, 20005, "匹配不存在")
 		return
 	}
-	if e.Status() == StatusMatched {
+	if e.Status == StatusMatched {
 		httpx.WriteOK(w, map[string]any{
-			"matchId":    e.MatchID(),
+			"matchId":    e.MatchID,
 			"status":     StatusMatched,
-			"roomId":     e.RoomID(),
+			"roomId":     e.RoomID,
 			"serverId":   e.ServerID(),
-			"wsUrl":      e.WsURL(),
-			"enterToken": e.EnterToken(),
-			"expireAt":   e.ExpireAt(),
+			"wsUrl":      e.WsURL,
+			"enterToken": e.EnterToken,
+			"expireAt":   e.ExpireAt,
 		})
 		return
 	}
 	httpx.WriteOK(w, map[string]any{
-		"matchId":              e.MatchID(),
-		"status":               e.Status(),
+		"matchId":              e.MatchID,
+		"status":               e.Status,
 		"stage":                "SEARCHING_ROOM",
 		"waitSeconds":          e.WaitSeconds(),
 		"estimatedWaitSeconds": h.cfg.MaxWaitSeconds,

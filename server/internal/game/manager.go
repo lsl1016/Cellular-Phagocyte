@@ -28,23 +28,17 @@ type PlayerInfo struct {
 	Level    int
 }
 
-type tokenEntry struct {
-	roomID   string
-	userID   string
-	expireAt int64
-}
-
 // Manager 管理一个游戏服务上的所有房间以及入房凭证注册表。
+// 房间实例（Room）始终保存在内存中；凭证存储委托给 TokenStore（内存 / Redis）。
 type Manager struct {
 	cfg     config.Config
 	users   *user.Service
 	log     *slog.Logger
 	settler Settler
+	tokens  TokenStore
 
-	mu          sync.RWMutex
-	rooms       map[string]*Room
-	tokens      map[string]tokenEntry // 入房凭证
-	reconTokens map[string]tokenEntry // 重连凭证
+	mu    sync.RWMutex
+	rooms map[string]*Room
 }
 
 // Settler 负责发放结算奖励，由结算服务实现。
@@ -52,15 +46,14 @@ type Settler interface {
 	Settle(r *SettleRequest) []protocol.SettlementResultData
 }
 
-// NewManager 创建一个游戏管理器。
-func NewManager(cfg config.Config, users *user.Service, log *slog.Logger) *Manager {
+// NewManager 用给定凭证存储创建一个游戏管理器。
+func NewManager(cfg config.Config, users *user.Service, log *slog.Logger, tokens TokenStore) *Manager {
 	return &Manager{
-		cfg:         cfg,
-		users:       users,
-		log:         log,
-		rooms:       make(map[string]*Room),
-		tokens:      make(map[string]tokenEntry),
-		reconTokens: make(map[string]tokenEntry),
+		cfg:    cfg,
+		users:  users,
+		log:    log,
+		tokens: tokens,
+		rooms:  make(map[string]*Room),
 	}
 }
 
@@ -84,12 +77,12 @@ func (m *Manager) CreateRoom(matchID, mode string, players []PlayerInfo) (string
 
 	m.mu.Lock()
 	m.rooms[roomID] = r
+	m.mu.Unlock()
 	for _, p := range players {
 		tok := idgen.Token()
 		tokens[p.UserID] = tok
-		m.tokens[tok] = tokenEntry{roomID: roomID, userID: p.UserID, expireAt: expireAt}
+		m.tokens.PutEnter(tok, TokenInfo{RoomID: roomID, UserID: p.UserID, ExpireAt: expireAt})
 	}
-	m.mu.Unlock()
 
 	wsURL := fmt.Sprintf("ws://%s%s", m.cfg.WSHost, m.cfg.WSPath)
 	m.log.Info("room_created", "roomId", roomID, "matchId", matchID, "humans", len(players), "bots", m.cfg.Game.BotFillCount)
@@ -100,16 +93,13 @@ func (m *Manager) CreateRoom(matchID, mode string, players []PlayerInfo) (string
 
 // ValidateEnterToken 校验凭证归属于对应房间/玩家且未过期。
 func (m *Manager) ValidateEnterToken(token, roomID, userID string) (*Room, bool) {
+	te, ok := m.tokens.GetEnter(token)
+	if !ok || te.RoomID != roomID || te.UserID != userID {
+		return nil, false
+	}
 	m.mu.RLock()
-	te, ok := m.tokens[token]
-	r := m.rooms[te.roomID]
+	r := m.rooms[te.RoomID]
 	m.mu.RUnlock()
-	if !ok || te.roomID != roomID || te.userID != userID {
-		return nil, false
-	}
-	if time.Now().UnixMilli() > te.expireAt {
-		return nil, false
-	}
 	if r == nil {
 		return nil, false
 	}
@@ -119,26 +109,24 @@ func (m *Manager) ValidateEnterToken(token, roomID, userID string) (*Room, bool)
 // issueReconnect 为玩家签发重连凭证。
 func (m *Manager) issueReconnect(roomID, userID string) string {
 	tok := idgen.Token()
-	m.mu.Lock()
-	m.reconTokens[tok] = tokenEntry{
-		roomID:   roomID,
-		userID:   userID,
-		expireAt: time.Now().UnixMilli() + m.cfg.Reconnect.TokenTTLMs,
-	}
-	m.mu.Unlock()
+	m.tokens.PutRecon(tok, TokenInfo{
+		RoomID:   roomID,
+		UserID:   userID,
+		ExpireAt: time.Now().UnixMilli() + m.cfg.Reconnect.TokenTTLMs,
+	})
 	return tok
 }
 
 // ValidateReconnectToken 校验重连凭证归属与有效期。
 func (m *Manager) ValidateReconnectToken(token, roomID, userID string) (*Room, bool) {
-	m.mu.RLock()
-	te, ok := m.reconTokens[token]
-	r := m.rooms[te.roomID]
-	m.mu.RUnlock()
-	if !ok || te.roomID != roomID || te.userID != userID {
+	te, ok := m.tokens.GetRecon(token)
+	if !ok || te.RoomID != roomID || te.UserID != userID {
 		return nil, false
 	}
-	if time.Now().UnixMilli() > te.expireAt || r == nil {
+	m.mu.RLock()
+	r := m.rooms[te.RoomID]
+	m.mu.RUnlock()
+	if r == nil {
 		return nil, false
 	}
 	return r, true
@@ -156,16 +144,7 @@ func (m *Manager) Room(roomID string) (*Room, bool) {
 func (m *Manager) removeRoom(roomID string) {
 	m.mu.Lock()
 	delete(m.rooms, roomID)
-	for tok, te := range m.tokens {
-		if te.roomID == roomID {
-			delete(m.tokens, tok)
-		}
-	}
-	for tok, te := range m.reconTokens {
-		if te.roomID == roomID {
-			delete(m.reconTokens, tok)
-		}
-	}
 	m.mu.Unlock()
+	m.tokens.DeleteByRoom(roomID)
 	m.log.Info("room_destroy", "roomId", roomID)
 }

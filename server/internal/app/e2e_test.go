@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gorilla/websocket"
 
 	"cellular-phagocyte/server/internal/app"
@@ -38,8 +39,29 @@ func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// TestFullClosedLoop 用内存存储跑完整闭环。
 func TestFullClosedLoop(t *testing.T) {
-	a := app.New(testConfig(), quietLogger())
+	a, err := app.New(testConfig(), quietLogger())
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	runClosedLoop(t, a)
+}
+
+// TestFullClosedLoopRedis 用 Redis 存储（miniredis）跑完整闭环，验证后端可切换。
+func TestFullClosedLoopRedis(t *testing.T) {
+	mr := miniredis.RunT(t)
+	cfg := testConfig()
+	cfg.Storage = config.StorageRedis
+	cfg.RedisAddr = mr.Addr()
+	a, err := app.New(cfg, quietLogger())
+	if err != nil {
+		t.Fatalf("app.New(redis): %v", err)
+	}
+	runClosedLoop(t, a)
+}
+
+func runClosedLoop(t *testing.T, a *app.App) {
 	srv := httptest.NewServer(a.Handler)
 	defer srv.Close()
 

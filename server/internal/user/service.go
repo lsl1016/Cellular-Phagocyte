@@ -3,7 +3,6 @@ package user
 import (
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"cellular-phagocyte/server/internal/idgen"
@@ -58,43 +57,43 @@ var (
 	ErrInvalidToken = errors.New("invalid token")
 )
 
-// Service 是内存中的用户 + 资产存储。
-type Service struct {
-	mu          sync.RWMutex
-	users       map[string]*User  // userId -> 用户
-	assets      map[string]*Asset // userId -> 资产
-	tokens      map[string]string // 访问令牌 -> userId
-	byDevice    map[string]string // 设备 deviceId -> userId
-	grantedBiz  map[string]bool   // bizId+assetType -> 是否已处理（幂等）
-	nextUserNum int64
+// Store 抽象用户与资产的存储，便于在内存与 Redis 实现间切换。
+type Store interface {
+	NextUserSeq() int64
+	GetUser(userID string) (*User, bool)
+	UserIDByDevice(deviceID string) (string, bool)
+	SaveUser(u *User)
+	GetAsset(userID string) (Asset, bool)
+	SaveAsset(a Asset)
+	PutToken(token, userID string)
+	UserIDByToken(token string) (string, bool)
+	// MarkBiz 标记业务幂等键；首次返回 true，重复返回 false。
+	MarkBiz(bizKey string) bool
 }
 
-// NewService 创建一个空的用户服务。
-func NewService() *Service {
-	return &Service{
-		users:       make(map[string]*User),
-		assets:      make(map[string]*Asset),
-		tokens:      make(map[string]string),
-		byDevice:    make(map[string]string),
-		grantedBiz:  make(map[string]bool),
-		nextUserNum: 10000,
-	}
+// Service 是用户 + 资产服务，业务逻辑在此，存储委托给 Store。
+type Service struct {
+	store Store
+}
+
+// NewService 用给定存储创建用户服务。
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // GuestLogin 返回该设备已有的游客或创建一个新游客，并始终签发新的访问令牌。
-func (s *Service) GuestLogin(deviceID string) (*User, *Asset, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Service) GuestLogin(deviceID string) (*User, Asset, string) {
 	var u *User
 	if deviceID != "" {
-		if uid, ok := s.byDevice[deviceID]; ok {
-			u = s.users[uid]
+		if uid, ok := s.store.UserIDByDevice(deviceID); ok {
+			if existing, ok := s.store.GetUser(uid); ok {
+				u = existing
+			}
 		}
 	}
 	if u == nil {
-		s.nextUserNum++
-		uid := fmt.Sprintf("%d", s.nextUserNum)
+		seq := s.store.NextUserSeq()
+		uid := fmt.Sprintf("%d", 10000+seq)
 		u = &User{
 			UserID:    uid,
 			Nickname:  "吞噬细胞" + idgen.Short(),
@@ -104,70 +103,59 @@ func (s *Service) GuestLogin(deviceID string) (*User, *Asset, string) {
 			DeviceID:  deviceID,
 			CreatedAt: time.Now().UnixMilli(),
 		}
-		s.users[uid] = u
-		s.assets[uid] = &Asset{UserID: uid, Coin: 0, Exp: 0, Level: 1}
-		if deviceID != "" {
-			s.byDevice[deviceID] = uid
-		}
+		s.store.SaveUser(u)
+		s.store.SaveAsset(Asset{UserID: uid, Coin: 0, Exp: 0, Level: 1})
 	}
 
 	token := idgen.Token()
-	s.tokens[token] = u.UserID
-	return u, s.assets[u.UserID], token
+	s.store.PutToken(token, u.UserID)
+	asset, _ := s.store.GetAsset(u.UserID)
+	return u, asset, token
 }
 
 // UserByToken 将访问令牌解析为用户。
 func (s *Service) UserByToken(token string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	uid, ok := s.tokens[token]
+	uid, ok := s.store.UserIDByToken(token)
 	if !ok {
 		return nil, ErrInvalidToken
 	}
-	return s.users[uid], nil
+	u, ok := s.store.GetUser(uid)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	return u, nil
 }
 
 // GetUser 按 id 返回用户。
 func (s *Service) GetUser(userID string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	u, ok := s.users[userID]
+	u, ok := s.store.GetUser(userID)
 	if !ok {
 		return nil, ErrUserNotFound
 	}
 	return u, nil
 }
 
-// GetAsset 返回用户资产的副本。
+// GetAsset 返回用户资产。
 func (s *Service) GetAsset(userID string) (Asset, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	a, ok := s.assets[userID]
+	a, ok := s.store.GetAsset(userID)
 	if !ok {
 		return Asset{}, ErrUserNotFound
 	}
-	return *a, nil
+	return a, nil
 }
 
-// GrantAssets 按 bizID 幂等地应用金币/经验变更。重复的 bizID+assetType 会被跳过。
-// 等级根据总经验重新计算。
+// GrantAssets 按 bizID 幂等地应用金币/经验变更，并按经验表重算等级。
 func (s *Service) GrantAssets(userID, bizID string, items []GrantItem) (GrantOutcome, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	a, ok := s.assets[userID]
+	a, ok := s.store.GetAsset(userID)
 	if !ok {
 		return GrantOutcome{}, ErrUserNotFound
 	}
 
 	out := GrantOutcome{UserID: userID, OldLevel: a.Level}
 	for _, it := range items {
-		key := bizID + ":" + it.AssetType
-		if s.grantedBiz[key] {
+		if !s.store.MarkBiz(bizID + ":" + it.AssetType) {
 			continue // 幂等：已经处理过
 		}
-		s.grantedBiz[key] = true
-
 		res := GrantResult{AssetType: it.AssetType, ChangeAmount: it.Amount}
 		switch it.AssetType {
 		case "COIN":
@@ -184,9 +172,9 @@ func (s *Service) GrantAssets(userID, bizID string, items []GrantItem) (GrantOut
 		out.Results = append(out.Results, res)
 	}
 
-	newLevel := LevelForExp(a.Exp)
-	a.Level = newLevel
-	out.NewLevel = newLevel
-	out.LevelChanged = newLevel != out.OldLevel
+	a.Level = LevelForExp(a.Exp)
+	s.store.SaveAsset(a)
+	out.NewLevel = a.Level
+	out.LevelChanged = a.Level != out.OldLevel
 	return out, nil
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func TestOnSettledUpdatesDailyAndBest(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	// rankPoint = finalScore 1000 + eatPlayer 2*50 + rankBonus(1)=1000 => 2100
 	s.OnSettled(settlement.SettledPlayer{UserID: "u1", Nickname: "A", FinalScore: 1000, EatPlayerCount: 2, Rank: 1})
 
@@ -32,7 +32,7 @@ func TestOnSettledUpdatesDailyAndBest(t *testing.T) {
 }
 
 func TestDailyAccumulatesBestScoreTakesMax(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	s.OnSettled(settlement.SettledPlayer{UserID: "u1", Nickname: "A", FinalScore: 1000, Rank: 1}) // daily +2000, best 1000
 	s.OnSettled(settlement.SettledPlayer{UserID: "u1", Nickname: "A", FinalScore: 500, Rank: 5})  // daily +500+300=800, best 仍 1000
 
@@ -48,7 +48,7 @@ func TestDailyAccumulatesBestScoreTakesMax(t *testing.T) {
 }
 
 func TestTopOrdersDescAndMe(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	s.OnSettled(settlement.SettledPlayer{UserID: "low", Nickname: "L", FinalScore: 100, Rank: 50})
 	s.OnSettled(settlement.SettledPlayer{UserID: "high", Nickname: "H", FinalScore: 5000, Rank: 1})
 
@@ -63,7 +63,7 @@ func TestTopOrdersDescAndMe(t *testing.T) {
 }
 
 func TestUnknownRankType(t *testing.T) {
-	s := NewService()
+	s := NewService(NewMemoryStore())
 	if _, ok := s.Top("nope", "", 1, 50); ok {
 		t.Fatal("未知榜单类型应返回 false")
 	}

@@ -20,6 +20,12 @@ func main() {
 	if host := os.Getenv("WS_HOST"); host != "" {
 		cfg.WSHost = host
 	}
+	if s := os.Getenv("STORAGE"); s != "" {
+		cfg.Storage = s
+	}
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		cfg.RedisAddr = addr
+	}
 
 	// 便于本地联调/测试的可选时间参数覆盖。
 	cfg.Game.BattleDurationSeconds = envInt("GAME_BATTLE_SECONDS", cfg.Game.BattleDurationSeconds)
@@ -30,7 +36,11 @@ func main() {
 	cfg.Match.MaxWaitSeconds = envInt("MATCH_MAX_WAIT_SECONDS", cfg.Match.MaxWaitSeconds)
 
 	log := logx.Default()
-	a := app.New(cfg, log)
+	a, err := app.New(cfg, log)
+	if err != nil {
+		log.Error("server_init_failed", "err", err)
+		os.Exit(1)
+	}
 
 	log.Info("server_start", "addr", cfg.HTTPAddr, "wsPath", cfg.WSPath)
 	if err := http.ListenAndServe(cfg.HTTPAddr, a.Handler); err != nil {

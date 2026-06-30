@@ -58,11 +58,19 @@ type MatchConfig struct {
 	EnterTokenTTLMs int64
 }
 
+// 存储后端取值。
+const (
+	StorageMemory = "memory"
+	StorageRedis  = "redis"
+)
+
 // Config 是顶层服务配置。
 type Config struct {
 	HTTPAddr  string
 	WSPath    string
 	WSHost    string // 在 wsUrl 中告知客户端的 host:port
+	Storage   string // memory | redis
+	RedisAddr string // Storage=redis 时的连接地址
 	Game      GameConfig
 	Match     MatchConfig
 	Reconnect ReconnectConfig
@@ -71,9 +79,11 @@ type Config struct {
 // Default 返回 MVP 默认配置。
 func Default() Config {
 	return Config{
-		HTTPAddr: ":8080",
-		WSPath:   "/ws",
-		WSHost:   "localhost:8080",
+		HTTPAddr:  ":8080",
+		WSPath:    "/ws",
+		WSHost:    "localhost:8080",
+		Storage:   StorageMemory,
+		RedisAddr: "localhost:6379",
 		Game: GameConfig{
 			TickRate:              20,
 			SnapshotRate:          10,

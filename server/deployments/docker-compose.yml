@@ -1,0 +1,31 @@
+# 一键启动 Redis + 游戏服务端（Redis 存储版）。
+# 用法（在 server/ 目录下）：
+#   docker compose -f deployments/docker-compose.yml up --build
+# 仅启动 Redis、本机直接 go run（便于调试）：
+#   docker compose -f deployments/docker-compose.yml up -d redis
+#   STORAGE=redis REDIS_ADDR=localhost:6379 go run ./cmd/server
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      STORAGE: redis
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8080"
+      WS_HOST: "localhost:8080"
+    ports:
+      - "8080:8080"

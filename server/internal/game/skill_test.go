@@ -12,7 +12,7 @@ func testRoom(t *testing.T) *Room {
 	t.Helper()
 	cfg := config.Default()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := NewManager(cfg, nil, log)
+	mgr := NewManager(cfg, nil, log, NewMemoryTokenStore())
 	r := newRoom("r_test", "m_test", "classic", cfg.Game, mgr, log)
 	r.status = RoomRunning
 	return r

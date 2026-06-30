@@ -1,11 +1,10 @@
-// Package rank 提供全服排行榜：内存维护日榜/周榜（累加 rankPoint）与最高分榜
+// Package rank 提供全服排行榜：维护日榜/周榜（累加 rankPoint）与最高分榜
 // （取最大）。结算成功后更新，仅做只读查询。对应设计文档「全服排行榜系统」。
+// 存储委托给 Store（内存 / Redis ZSET）。
 package rank
 
 import (
 	"fmt"
-	"sort"
-	"sync"
 	"time"
 
 	"cellular-phagocyte/server/internal/settlement"
@@ -46,23 +45,40 @@ type ListResult struct {
 	RefreshText string   `json:"refreshText"`
 }
 
-// Service 是内存排行榜存储。
+// Scored 是榜单成员及其分数。
+type Scored struct {
+	UserID string
+	Score  int64
+}
+
+// Store 抽象排行榜存储（内存 / Redis ZSET）。语义与 Redis ZSET 对齐：
+// 排名均为降序（分数高者在前），名次从 0 开始。
+type Store interface {
+	IncrBy(key, member string, delta int64) // ZINCRBY：日榜/周榜累加
+	Max(key, member string, value int64)     // best_score：仅当更大时更新
+	SetBrief(userID, nickname string)         // 记录昵称
+	Brief(userID string) string               // 取昵称
+	Range(key string, start, stop int) []Scored // ZREVRANGE：降序，含两端，0 起
+	Card(key string) int                          // ZCARD：成员总数
+	RevRank(key, member string) (int, bool)        // ZREVRANK：降序名次，0 起
+	Score(key, member string) (int64, bool)        // ZSCORE
+}
+
+// Service 是排行榜服务。
 type Service struct {
-	mu     sync.RWMutex
-	boards map[string]map[string]int64 // boardKey -> userId -> score
-	brief  map[string]string           // userId -> nickname
+	store Store
 }
 
-// NewService 创建排行榜服务。
-func NewService() *Service {
-	return &Service{
-		boards: make(map[string]map[string]int64),
-		brief:  make(map[string]string),
-	}
+// NewService 用给定存储创建排行榜服务。
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
-func dailyKey(t time.Time) string  { return "rank:daily:" + t.Format("20060102") }
-func weeklyKey(t time.Time) string { y, w := t.ISOWeek(); return fmt.Sprintf("rank:weekly:%04dW%02d", y, w) }
+func dailyKey(t time.Time) string { return "rank:daily:" + t.Format("20060102") }
+func weeklyKey(t time.Time) string {
+	y, w := t.ISOWeek()
+	return fmt.Sprintf("rank:weekly:%04dW%02d", y, w)
+}
 
 const bestScoreKey = "rank:best_score"
 
@@ -115,54 +131,10 @@ func (s *Service) OnSettled(p settlement.SettledPlayer) {
 	rankPoint := p.FinalScore + int64(p.EatPlayerCount)*50 + rankBonus(p.Rank)
 	now := time.Now()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.brief[p.UserID] = p.Nickname
-
-	s.addLocked(dailyKey(now), p.UserID, rankPoint)  // 累加
-	s.addLocked(weeklyKey(now), p.UserID, rankPoint) // 累加
-	s.maxLocked(bestScoreKey, p.UserID, p.FinalScore) // 取最大
-}
-
-func (s *Service) addLocked(key, userID string, delta int64) {
-	b := s.boards[key]
-	if b == nil {
-		b = make(map[string]int64)
-		s.boards[key] = b
-	}
-	b[userID] += delta
-}
-
-func (s *Service) maxLocked(key, userID string, value int64) {
-	b := s.boards[key]
-	if b == nil {
-		b = make(map[string]int64)
-		s.boards[key] = b
-	}
-	if value > b[userID] {
-		b[userID] = value
-	}
-}
-
-type scored struct {
-	userID string
-	score  int64
-}
-
-// sortedLocked 返回某榜全量按分数降序的列表。
-func (s *Service) sortedLocked(key string) []scored {
-	b := s.boards[key]
-	list := make([]scored, 0, len(b))
-	for uid, sc := range b {
-		list = append(list, scored{uid, sc})
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].score != list[j].score {
-			return list[i].score > list[j].score
-		}
-		return list[i].userID < list[j].userID
-	})
-	return list
+	s.store.SetBrief(p.UserID, p.Nickname)
+	s.store.IncrBy(dailyKey(now), p.UserID, rankPoint)  // 累加
+	s.store.IncrBy(weeklyKey(now), p.UserID, rankPoint) // 累加
+	s.store.Max(bestScoreKey, p.UserID, p.FinalScore)   // 取最大
 }
 
 // Top 返回某榜分页结果及自身排名。
@@ -172,10 +144,6 @@ func (s *Service) Top(rankType, selfUserID string, page, pageSize int) (ListResu
 		return ListResult{}, false
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	sorted := s.sortedLocked(key)
 	res := ListResult{
 		RankType: rankType, PeriodKey: periodKeyOf(key),
 		Page: page, PageSize: pageSize, List: []Entry{},
@@ -183,30 +151,29 @@ func (s *Service) Top(rankType, selfUserID string, page, pageSize int) (ListResu
 		SelfRank:    SelfRank{OnRank: false},
 	}
 
-	for i, sc := range sorted {
-		if sc.userID == selfUserID {
-			r := i + 1
-			res.SelfRank = SelfRank{Rank: &r, Score: sc.score, OnRank: true}
-			break
-		}
+	if r, ok := s.store.RevRank(key, selfUserID); ok {
+		sc, _ := s.store.Score(key, selfUserID)
+		rank := r + 1
+		res.SelfRank = SelfRank{Rank: &rank, Score: sc, OnRank: true}
 	}
 
+	total := s.store.Card(key)
 	start := (page - 1) * pageSize
 	if start < 0 {
 		start = 0
 	}
-	if start >= len(sorted) {
+	if start >= total {
 		return res, true
 	}
 	end := start + pageSize
-	if end > len(sorted) {
-		end = len(sorted)
+	if end > total {
+		end = total
 	}
-	for i := start; i < end; i++ {
-		sc := sorted[i]
+	for i, sc := range s.store.Range(key, start, end-1) {
+		rank := start + i + 1
 		res.List = append(res.List, Entry{
-			Rank: i + 1, UserID: sc.userID, Nickname: s.brief[sc.userID],
-			Score: sc.score, Self: sc.userID == selfUserID,
+			Rank: rank, UserID: sc.UserID, Nickname: s.store.Brief(sc.UserID),
+			Score: sc.Score, Self: sc.UserID == selfUserID,
 		})
 	}
 	return res, true
@@ -218,14 +185,10 @@ func (s *Service) Me(rankType, userID string) (SelfRank, bool) {
 	if !ok {
 		return SelfRank{}, false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	sorted := s.sortedLocked(key)
-	for i, sc := range sorted {
-		if sc.userID == userID {
-			r := i + 1
-			return SelfRank{Rank: &r, Score: sc.score, OnRank: true}, true
-		}
+	if r, ok := s.store.RevRank(key, userID); ok {
+		sc, _ := s.store.Score(key, userID)
+		rank := r + 1
+		return SelfRank{Rank: &rank, Score: sc, OnRank: true}, true
 	}
 	return SelfRank{OnRank: false}, true
 }

@@ -3,7 +3,6 @@ package settlement
 import (
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"cellular-phagocyte/server/internal/game"
 	"cellular-phagocyte/server/internal/protocol"
@@ -38,17 +37,21 @@ type Sink interface {
 	OnSettled(p SettledPlayer)
 }
 
+// Store 抽象结算结果存储（内存 / Redis）。
+type Store interface {
+	SaveResult(res protocol.SettlementResultData)
+	Result(roomID, userID string) (protocol.SettlementResultData, bool)
+	LatestResult(userID string) (protocol.SettlementResultData, bool)
+}
+
 // Service 计算奖励、（幂等地）发放资产，并保存每个玩家的结算结果以供后续查询。
 // 它实现了 game.Settler 接口。
 type Service struct {
 	cfg   RewardConfig
 	users *user.Service
 	log   *slog.Logger
+	store Store
 	sinks []Sink
-
-	mu     sync.RWMutex
-	byRoom map[string]map[string]protocol.SettlementResultData // roomId -> userId -> 结果
-	latest map[string]string                                   // userId -> 最近一次的 roomId
 }
 
 // AddSink 注册结算下游消费者（战绩、排行榜）。
@@ -57,13 +60,12 @@ func (s *Service) AddSink(sink Sink) {
 }
 
 // NewService 创建一个结算服务。
-func NewService(users *user.Service, log *slog.Logger) *Service {
+func NewService(users *user.Service, log *slog.Logger, store Store) *Service {
 	return &Service{
-		cfg:    DefaultRewardConfig(),
-		users:  users,
-		log:    log,
-		byRoom: make(map[string]map[string]protocol.SettlementResultData),
-		latest: make(map[string]string),
+		cfg:   DefaultRewardConfig(),
+		users: users,
+		log:   log,
+		store: store,
 	}
 }
 
@@ -106,7 +108,7 @@ func (s *Service) Settle(req *game.SettleRequest) []protocol.SettlementResultDat
 			IsBestScore:    true,
 			Status:         "SUCCESS",
 		}
-		s.storeResult(res)
+		s.store.SaveResult(res)
 		out = append(out, res)
 		s.log.Info("settlement_success", "roomId", req.RoomID, "userId", p.UserID,
 			"rank", p.Rank, "coin", reward.Coin, "exp", reward.Exp)
@@ -128,37 +130,12 @@ func (s *Service) Settle(req *game.SettleRequest) []protocol.SettlementResultDat
 	return out
 }
 
-func (s *Service) storeResult(res protocol.SettlementResultData) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	room := s.byRoom[res.RoomID]
-	if room == nil {
-		room = make(map[string]protocol.SettlementResultData)
-		s.byRoom[res.RoomID] = room
-	}
-	room[res.UserID] = res
-	s.latest[res.UserID] = res.RoomID
-}
-
 // Result 返回某玩家在某房间的结算结果。
 func (s *Service) Result(roomID, userID string) (protocol.SettlementResultData, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	room, ok := s.byRoom[roomID]
-	if !ok {
-		return protocol.SettlementResultData{}, false
-	}
-	res, ok := room[userID]
-	return res, ok
+	return s.store.Result(roomID, userID)
 }
 
 // LatestResult 返回某玩家最近一次的结算结果。
 func (s *Service) LatestResult(userID string) (protocol.SettlementResultData, bool) {
-	s.mu.RLock()
-	roomID, ok := s.latest[userID]
-	s.mu.RUnlock()
-	if !ok {
-		return protocol.SettlementResultData{}, false
-	}
-	return s.Result(roomID, userID)
+	return s.store.LatestResult(userID)
 }

@@ -1,12 +1,8 @@
-// Package record 提供战绩查询：内存保存每局每玩家的对局结果，结算成功后写入，
-// 仅做只读聚合查询。对应设计文档「战绩系统」。
+// Package record 提供战绩查询：保存每局每玩家的对局结果，结算成功后写入，
+// 仅做只读聚合查询。对应设计文档「战绩系统」。存储委托给 Store。
 package record
 
-import (
-	"sync"
-
-	"cellular-phagocyte/server/internal/settlement"
-)
+import "cellular-phagocyte/server/internal/settlement"
 
 // Entry 是单局单玩家的战绩记录。
 type Entry struct {
@@ -53,24 +49,26 @@ func modeName(mode string) string {
 	return mode
 }
 
-// Service 是内存战绩存储。
-type Service struct {
-	mu      sync.RWMutex
-	byUser  map[string][]*Entry         // userId -> 倒序对局列表（追加在尾，查询时倒序）
-	byRoom  map[string]map[string]*Entry // roomId -> userId -> 记录
+// Store 抽象战绩存储（内存 / Redis）。ListByUser 返回按时间升序的全部记录。
+type Store interface {
+	Append(userID string, e Entry)
+	ListByUser(userID string) []Entry
+	Get(roomID, userID string) (Entry, bool)
 }
 
-// NewService 创建战绩服务。
-func NewService() *Service {
-	return &Service{
-		byUser: make(map[string][]*Entry),
-		byRoom: make(map[string]map[string]*Entry),
-	}
+// Service 是战绩服务。
+type Service struct {
+	store Store
+}
+
+// NewService 用给定存储创建战绩服务。
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // OnSettled 实现 settlement.Sink：结算成功后写入一条战绩。
 func (s *Service) OnSettled(p settlement.SettledPlayer) {
-	e := &Entry{
+	s.store.Append(p.UserID, Entry{
 		RoomID: p.RoomID, MatchID: p.MatchID, Mode: p.Mode, ModeName: modeName(p.Mode),
 		Rank: p.Rank, TotalPlayers: p.TotalPlayers,
 		FinalScore: p.FinalScore, MaxMass: p.MaxMass,
@@ -78,25 +76,13 @@ func (s *Service) OnSettled(p settlement.SettledPlayer) {
 		AliveSeconds: p.AliveSeconds, Alive: p.Alive,
 		CoinReward: p.CoinReward, ExpReward: p.ExpReward, Status: p.Status,
 		StartTime: p.StartTime, EndTime: p.EndTime, DurationSeconds: p.DurationSeconds,
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.byUser[p.UserID] = append(s.byUser[p.UserID], e)
-	room := s.byRoom[p.RoomID]
-	if room == nil {
-		room = make(map[string]*Entry)
-		s.byRoom[p.RoomID] = room
-	}
-	room[p.UserID] = e
+	})
 }
 
 // List 返回某用户的战绩分页列表（按 endTime 倒序），可按 mode 过滤。
 func (s *Service) List(userID, mode string, page, pageSize int) (total int, list []Entry) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	all := s.byUser[userID]
-	filtered := make([]*Entry, 0, len(all))
+	all := s.store.ListByUser(userID)
+	filtered := make([]Entry, 0, len(all))
 	for i := len(all) - 1; i >= 0; i-- { // 倒序
 		if mode == "" || all[i].Mode == mode {
 			filtered = append(filtered, all[i])
@@ -115,36 +101,18 @@ func (s *Service) List(userID, mode string, page, pageSize int) (total int, list
 	if end > total {
 		end = total
 	}
-	list = make([]Entry, 0, end-start)
-	for _, e := range filtered[start:end] {
-		list = append(list, *e)
-	}
-	return total, list
+	return total, filtered[start:end]
 }
 
 // Get 返回某用户某局战绩详情。
 func (s *Service) Get(roomID, userID string) (Entry, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	room, ok := s.byRoom[roomID]
-	if !ok {
-		return Entry{}, false
-	}
-	e, ok := room[userID]
-	if !ok {
-		return Entry{}, false
-	}
-	return *e, true
+	return s.store.Get(roomID, userID)
 }
 
 // Summary 返回某用户的统计概览（实时聚合）。
 func (s *Service) Summary(userID string) Summary {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var sm Summary
-	sm.BestRank = 0
-	for _, e := range s.byUser[userID] {
+	for _, e := range s.store.ListByUser(userID) {
 		sm.TotalGames++
 		if e.Rank == 1 {
 			sm.FirstPlaceCount++
@@ -177,11 +145,9 @@ func (s *Service) Summary(userID string) Summary {
 
 // Latest 返回某用户最近一局战绩。
 func (s *Service) Latest(userID string) (Entry, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	all := s.byUser[userID]
+	all := s.store.ListByUser(userID)
 	if len(all) == 0 {
 		return Entry{}, false
 	}
-	return *all[len(all)-1], true
+	return all[len(all)-1], true
 }
