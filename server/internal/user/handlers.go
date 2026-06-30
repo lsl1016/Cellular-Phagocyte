@@ -64,6 +64,19 @@ func (h *Handlers) AuthUser(w http.ResponseWriter, r *http.Request) (*User, bool
 	return u, true
 }
 
+// TryAuthUser 尝试解析当前用户，不写入错误（用于可选登录的接口）。
+func (h *Handlers) TryAuthUser(r *http.Request) (*User, bool) {
+	token := bearerToken(r)
+	if token == "" {
+		return nil, false
+	}
+	u, err := h.svc.UserByToken(token)
+	if err != nil {
+		return nil, false
+	}
+	return u, true
+}
+
 func (h *Handlers) me(w http.ResponseWriter, r *http.Request) {
 	u, ok := h.AuthUser(w, r)
 	if !ok {

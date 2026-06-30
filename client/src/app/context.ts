@@ -25,7 +25,7 @@ export interface SceneCtx {
   toast(message: string): void;
 }
 
-export type SceneName = 'login' | 'lobby' | 'match' | 'game' | 'settlement';
+export type SceneName = 'login' | 'lobby' | 'match' | 'game' | 'settlement' | 'records' | 'rank';
 
 export interface Scene {
   mount(ctx: SceneCtx, params?: unknown): void | Promise<void>;

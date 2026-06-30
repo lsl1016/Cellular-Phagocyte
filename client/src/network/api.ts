@@ -8,6 +8,12 @@ import type {
   MatchStartData,
   MatchStatusData,
   MeData,
+  RankConfigItem,
+  RankListData,
+  RankSelf,
+  RecordEntry,
+  RecordListData,
+  RecordSummary,
   SettlementData,
 } from '../protocol/http-models.js';
 
@@ -52,5 +58,32 @@ export class ApiService {
 
   settlementByRoom(roomId: string): Promise<SettlementData> {
     return this.http.get<SettlementData>(`/api/settlements/${encodeURIComponent(roomId)}/me`);
+  }
+
+  records(page = 1, pageSize = 10, mode = ''): Promise<RecordListData> {
+    const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (mode) q.set('mode', mode);
+    return this.http.get<RecordListData>(`/api/records?${q.toString()}`);
+  }
+
+  recordDetail(roomId: string): Promise<RecordEntry> {
+    return this.http.get<RecordEntry>(`/api/records/${encodeURIComponent(roomId)}`);
+  }
+
+  recordSummary(): Promise<RecordSummary> {
+    return this.http.get<RecordSummary>('/api/records/summary');
+  }
+
+  ranks(rankType = 'daily', page = 1, pageSize = 50): Promise<RankListData> {
+    const q = new URLSearchParams({ rankType, page: String(page), pageSize: String(pageSize) });
+    return this.http.get<RankListData>(`/api/ranks?${q.toString()}`);
+  }
+
+  rankMe(rankType = 'daily'): Promise<RankSelf & { rankType: string }> {
+    return this.http.get<RankSelf & { rankType: string }>(`/api/ranks/me?rankType=${encodeURIComponent(rankType)}`);
+  }
+
+  rankConfig(): Promise<{ rankTypes: RankConfigItem[] }> {
+    return this.http.get<{ rankTypes: RankConfigItem[] }>('/api/ranks/config');
   }
 }

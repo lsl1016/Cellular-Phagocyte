@@ -124,6 +124,19 @@ html, body {
 
 .kv { display: flex; justify-content: space-between; font-size: 15px; }
 .kv .k { color: #93a0c8; }
+.rec-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 360px; overflow-y: auto; width: 100%;
+}
+.rec-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.04);
+  font-size: 13px;
+}
+.rec-row.me { background: rgba(106,209,255,0.16); }
+.rec-row > span:nth-child(2) { flex: 1; }
+.rec-rank { color: #ffd479; min-width: 64px; font-weight: 700; }
+
 .spinner {
   width: 36px; height: 36px; border-radius: 50%;
   border: 3px solid #2b3a66; border-top-color: #6a5bff;

@@ -118,6 +118,23 @@ async function testFullLoopAndSkills() {
   const assets = await api.getAssets();
   assert.equal(assets.coin, settlement.coinReward, '金币应入账');
   log('资产校验通过', `金币 ${assets.coin}`, `经验 ${assets.exp}`);
+
+  // 战绩写入校验
+  const records = await api.records(1, 10);
+  assert.ok(records.total >= 1, '应至少有一条战绩');
+  assert.equal(records.list[0].roomId, roomId, '最近战绩应为本局');
+  assert.equal(records.list[0].finalScore, settlement.finalScore, '战绩分数应与结算一致');
+  const summary = await api.recordSummary();
+  assert.ok(summary.totalGames >= 1, '统计总场次应>=1');
+  log('战绩校验通过', `总场次 ${summary.totalGames}`, `本局名次 ${records.list[0].rank}`);
+
+  // 排行榜更新校验
+  const board = await api.ranks('daily', 1, 50);
+  const mine = board.list.find((e) => e.userId === userId);
+  assert.ok(mine && mine.score > 0, '日榜应包含本人且分值>0');
+  const rankMe = await api.rankMe('daily');
+  assert.ok(rankMe.onRank && rankMe.rank !== null, '本人应已上日榜');
+  log('排行榜校验通过', `日榜分 ${mine.score}`, `名次 ${rankMe.rank}`);
 }
 
 async function testReconnect() {

@@ -10,6 +10,8 @@ import (
 	"cellular-phagocyte/server/internal/game"
 	"cellular-phagocyte/server/internal/gateway"
 	"cellular-phagocyte/server/internal/match"
+	"cellular-phagocyte/server/internal/rank"
+	"cellular-phagocyte/server/internal/record"
 	"cellular-phagocyte/server/internal/settlement"
 	"cellular-phagocyte/server/internal/user"
 )
@@ -23,6 +25,8 @@ type App struct {
 	Match      *match.Service
 	Game       *game.Manager
 	Settlement *settlement.Service
+	Record     *record.Service
+	Rank       *rank.Service
 }
 
 // New 根据给定配置构建并组装所有服务。
@@ -36,6 +40,13 @@ func New(cfg config.Config, log *slog.Logger) *App {
 	mgr.SetSettler(settleSvc)
 	settleH := settlement.NewHandlers(settleSvc, userH)
 
+	recordSvc := record.NewService()
+	rankSvc := rank.NewService()
+	settleSvc.AddSink(recordSvc)
+	settleSvc.AddSink(rankSvc)
+	recordH := record.NewHandlers(recordSvc, userH)
+	rankH := rank.NewHandlers(rankSvc, userH)
+
 	matchSvc := match.NewService(cfg.Match, users, mgr, log)
 	matchH := match.NewHandlers(matchSvc, userH, cfg.Match)
 
@@ -45,6 +56,8 @@ func New(cfg config.Config, log *slog.Logger) *App {
 	userH.Register(mux)
 	matchH.Register(mux)
 	settleH.Register(mux)
+	recordH.Register(mux)
+	rankH.Register(mux)
 	mux.HandleFunc(cfg.WSPath, gw.Handle)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -58,6 +71,8 @@ func New(cfg config.Config, log *slog.Logger) *App {
 		Match:      matchSvc,
 		Game:       mgr,
 		Settlement: settleSvc,
+		Record:     recordSvc,
+		Rank:       rankSvc,
 	}
 }
 

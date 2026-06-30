@@ -18,6 +18,10 @@ export class LobbyScene implements Scene {
       nameEl,
       h('div', { className: 'row' }, [levelEl, coinEl, expEl]),
       button('开始游戏', () => ctx.go('match')),
+      h('div', { className: 'row' }, [
+        button('战绩', () => ctx.go('records'), 'btn secondary'),
+        button('排行榜', () => ctx.go('rank'), 'btn secondary'),
+      ]),
     ]);
     ctx.uiRoot.append(h('div', { className: 'panel centered' }, [card]));
 
