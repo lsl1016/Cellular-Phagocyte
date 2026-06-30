@@ -40,12 +40,17 @@ func (r *Room) stepLocked(snapshotEvery, rankEvery int) bool {
 	}
 	r.tickSeq++
 	dt := 1.0 / float64(r.cfg.TickRate)
+	now := time.Now().UnixMilli()
 
 	r.applyInputsLocked()
 	r.botAILocked()
-	r.moveLocked(dt)
+	r.moveLocked(dt, now)
+	r.updateEjectedLocked(dt)
 	r.eatFoodLocked()
+	r.eatEjectedLocked(now)
 	r.eatPlayersLocked()
+	r.mergeBallsLocked(now)
+	r.checkReconnectTimeoutLocked(now)
 	r.updateStatsLocked()
 
 	if r.tickSeq%int64(r.cfg.TickRate) == 0 {
@@ -58,7 +63,7 @@ func (r *Room) stepLocked(snapshotEvery, rankEvery int) bool {
 		r.broadcastRankLocked()
 	}
 
-	if time.Now().UnixMilli() >= r.endTimeMs {
+	if now >= r.endTimeMs {
 		return true
 	}
 	return r.allHumansFinishedLocked()
@@ -100,18 +105,128 @@ func (r *Room) botAILocked() {
 	}
 }
 
-func (r *Room) moveLocked(dt float64) {
+func (r *Room) moveLocked(dt float64, now int64) {
+	for _, id := range r.order {
+		p := r.players[id]
+		if !p.alive() {
+			continue
+		}
+		// 断线玩家停止移动（STOP 策略）
+		if p.Status == StatusDisconnected {
+			continue
+		}
+		dirX := math.Cos(p.Direction)
+		dirY := math.Sin(p.Direction)
+		for _, b := range p.Balls {
+			speed := Speed(r.cfg.BaseSpeed, b.Mass, r.cfg.PlayerInitialMass)
+			vx := dirX * speed
+			vy := dirY * speed
+			// 分裂冲量随剩余时间线性衰减叠加
+			if b.boostUntil > now {
+				frac := float64(b.boostUntil-now) / float64(r.cfg.SplitBoostDurationMs)
+				vx += b.vx * frac
+				vy += b.vy * frac
+			}
+			b.X = clampF(b.X+vx*dt, b.Radius, r.cfg.MapWidth-b.Radius)
+			b.Y = clampF(b.Y+vy*dt, b.Radius, r.cfg.MapHeight-b.Radius)
+		}
+	}
+}
+
+// updateEjectedLocked 推进吐出物飞行；超时则停留为可吞噬对象。
+func (r *Room) updateEjectedLocked(dt float64) {
+	now := time.Now().UnixMilli()
+	for _, em := range r.ejected {
+		if now < em.moveUntil {
+			em.X = clampF(em.X+em.vx*dt, em.Radius, r.cfg.MapWidth-em.Radius)
+			em.Y = clampF(em.Y+em.vy*dt, em.Radius, r.cfg.MapHeight-em.Radius)
+		}
+	}
+}
+
+// eatEjectedLocked 处理玩家球体吞噬吐出物。
+func (r *Room) eatEjectedLocked(now int64) {
 	for _, id := range r.order {
 		p := r.players[id]
 		if !p.alive() {
 			continue
 		}
 		for _, b := range p.Balls {
-			speed := Speed(r.cfg.BaseSpeed, b.Mass, r.cfg.PlayerInitialMass)
-			b.X += math.Cos(p.Direction) * speed * dt
-			b.Y += math.Sin(p.Direction) * speed * dt
-			b.X = clampF(b.X, b.Radius, r.cfg.MapWidth-b.Radius)
-			b.Y = clampF(b.Y, b.Radius, r.cfg.MapHeight-b.Radius)
+			for eid, em := range r.ejected {
+				if em.OwnerID == p.UserID && now < em.protectUntil {
+					continue // 保护期内原主不可吃回
+				}
+				if CanEatFood(b.Radius, em.Radius, Distance(b.X, b.Y, em.X, em.Y)) {
+					b.Mass += em.Mass * r.cfg.EjectGainRatio
+					b.Radius = Radius(b.Mass, r.cfg.RadiusFactor)
+					delete(r.ejected, eid)
+					r.addEvent("EJECTED_MASS_EATEN", map[string]any{
+						"userId": p.UserID, "ballId": b.BallID, "ejectId": eid, "gainMass": em.Mass,
+					})
+				}
+			}
+		}
+	}
+}
+
+// mergeBallsLocked 处理同一玩家到期且重叠的分身合体。
+func (r *Room) mergeBallsLocked(now int64) {
+	for _, id := range r.order {
+		p := r.players[id]
+		if !p.alive() || len(p.Balls) < 2 {
+			continue
+		}
+		merged := true
+		for merged {
+			merged = false
+			for i := 0; i < len(p.Balls); i++ {
+				for j := i + 1; j < len(p.Balls); j++ {
+					a, b := p.Balls[i], p.Balls[j]
+					if now < a.canMergeAt || now < b.canMergeAt {
+						continue
+					}
+					bigger, smaller := a, b
+					if b.Mass > a.Mass {
+						bigger, smaller = b, a
+					}
+					if Distance(a.X, a.Y, b.X, b.Y) > bigger.Radius {
+						continue
+					}
+					bigger.Mass += smaller.Mass
+					bigger.Radius = Radius(bigger.Mass, r.cfg.RadiusFactor)
+					p.Balls = removeBall(p.Balls, smaller)
+					r.addEvent("PLAYER_MERGE", map[string]any{"userId": p.UserID, "ballId": bigger.BallID})
+					merged = true
+					break
+				}
+				if merged {
+					break
+				}
+			}
+		}
+	}
+}
+
+func removeBall(balls []*Ball, target *Ball) []*Ball {
+	out := balls[:0]
+	for _, b := range balls {
+		if b != target {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// checkReconnectTimeoutLocked 将超过重连窗口仍未回来的玩家判负。
+func (r *Room) checkReconnectTimeoutLocked(now int64) {
+	for _, id := range r.order {
+		p := r.players[id]
+		if p.Status == StatusDisconnected && p.disconnectDeadline != 0 && now > p.disconnectDeadline {
+			p.dead = true
+			p.Balls = nil
+			p.Status = StatusExited
+			p.disconnectDeadline = 0
+			r.addEvent("PLAYER_DEAD", map[string]any{"userId": p.UserID, "reason": "RECONNECT_TIMEOUT"})
 		}
 	}
 }

@@ -1,0 +1,16 @@
+{
+  "name": "cellular-phagocyte-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "吞噬细胞 H5 Canvas 客户端（P0 最小闭环）",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "serve": "python3 -m http.server 5173 --directory public",
+    "smoke": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

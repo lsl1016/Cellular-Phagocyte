@@ -5,6 +5,7 @@ package main
 import (
 	"net/http"
 	"os"
+	"strconv"
 
 	"cellular-phagocyte/server/internal/app"
 	"cellular-phagocyte/server/internal/config"
@@ -20,6 +21,14 @@ func main() {
 		cfg.WSHost = host
 	}
 
+	// 便于本地联调/测试的可选时间参数覆盖。
+	cfg.Game.BattleDurationSeconds = envInt("GAME_BATTLE_SECONDS", cfg.Game.BattleDurationSeconds)
+	cfg.Game.CountdownSeconds = envInt("GAME_COUNTDOWN_SECONDS", cfg.Game.CountdownSeconds)
+	cfg.Game.BotFillCount = envInt("GAME_BOTS", cfg.Game.BotFillCount)
+	cfg.Game.PlayerInitialMass = float64(envInt("GAME_INIT_MASS", int(cfg.Game.PlayerInitialMass)))
+	cfg.Match.MinStartPlayers = envInt("MATCH_MIN_PLAYERS", cfg.Match.MinStartPlayers)
+	cfg.Match.MaxWaitSeconds = envInt("MATCH_MAX_WAIT_SECONDS", cfg.Match.MaxWaitSeconds)
+
 	log := logx.Default()
 	a := app.New(cfg, log)
 
@@ -28,4 +37,14 @@ func main() {
 		log.Error("server_stopped", "err", err)
 		os.Exit(1)
 	}
+}
+
+// envInt 读取整数环境变量，缺省或非法时返回 def。
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }

@@ -56,15 +56,23 @@ func (g *Gateway) serve(conn *wsConn) {
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	// 第一条消息必须是 ENTER_ROOM。
+	// 第一条消息必须是 ENTER_ROOM 或 RECONNECT。
 	var first protocol.Envelope
 	if err := ws.ReadJSON(&first); err != nil {
 		return
 	}
-	if first.Type != protocol.TypeEnterRoom {
-		conn.Send(errEnvelope(40002, "expected ENTER_ROOM"))
-		return
+
+	switch first.Type {
+	case protocol.TypeEnterRoom:
+		g.serveEnter(conn, first)
+	case protocol.TypeReconnect:
+		g.serveReconnect(conn, first)
+	default:
+		conn.Send(errEnvelope(40002, "expected ENTER_ROOM or RECONNECT"))
 	}
+}
+
+func (g *Gateway) serveEnter(conn *wsConn, first protocol.Envelope) {
 	var ed protocol.EnterRoomData
 	_ = json.Unmarshal(first.Data, &ed)
 
@@ -95,6 +103,44 @@ func (g *Gateway) serve(conn *wsConn) {
 	g.readLoop(conn, room, ed.UserID)
 }
 
+func (g *Gateway) serveReconnect(conn *wsConn, first protocol.Envelope) {
+	var rd protocol.ReconnectData
+	_ = json.Unmarshal(first.Data, &rd)
+
+	room, ok := g.mgr.ValidateReconnectToken(rd.ReconnectToken, rd.RoomID, rd.UserID)
+	if !ok {
+		conn.Send(protocol.Envelope{
+			Type: protocol.TypeReconnectResult,
+			Seq:  first.Seq,
+			Data: protocol.MustMarshal(protocol.ReconnectResultData{
+				Success: false, Reason: "TOKEN_INVALID", Message: "重连凭证无效或已过期",
+			}),
+		})
+		return
+	}
+
+	result, recoverSnap, ok := room.Reconnect(rd.UserID, conn)
+	conn.Send(protocol.Envelope{
+		Type: protocol.TypeReconnectResult,
+		Seq:  first.Seq,
+		Data: protocol.MustMarshal(result),
+	})
+	if !ok {
+		return
+	}
+	if recoverSnap != nil {
+		conn.Send(protocol.Envelope{
+			Type:       protocol.TypeRoomRecover,
+			ServerTime: time.Now().UnixMilli(),
+			Data:       protocol.MustMarshal(recoverSnap),
+		})
+	}
+	g.log.Info("reconnect_success", "roomId", rd.RoomID, "userId", rd.UserID)
+
+	defer room.Disconnect(rd.UserID, conn)
+	g.readLoop(conn, room, rd.UserID)
+}
+
 func (g *Gateway) readLoop(conn *wsConn, room *game.Room, userID string) {
 	ws := conn.ws
 	for {
@@ -106,10 +152,20 @@ func (g *Gateway) readLoop(conn *wsConn, room *game.Room, userID string) {
 		switch env.Type {
 		case protocol.TypeReady:
 			room.MarkReady(userID)
-		case protocol.TypeMove, protocol.TypeSplit, protocol.TypeEject:
+		case protocol.TypeMove:
 			var in protocol.InputData
 			if err := json.Unmarshal(env.Data, &in); err == nil {
 				room.SubmitInput(userID, env.Seq, in.Direction)
+			}
+		case protocol.TypeSplit:
+			var in protocol.InputData
+			if err := json.Unmarshal(env.Data, &in); err == nil {
+				room.Split(userID, in.Direction)
+			}
+		case protocol.TypeEject:
+			var in protocol.InputData
+			if err := json.Unmarshal(env.Data, &in); err == nil {
+				room.Eject(userID, in.Direction)
 			}
 		case protocol.TypePing:
 			conn.Send(protocol.Envelope{Type: protocol.TypePong, ServerTime: time.Now().UnixMilli()})

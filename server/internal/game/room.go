@@ -37,6 +37,7 @@ type Room struct {
 	players map[string]*Player
 	order   []string // 稳定的真人+机器人顺序，用于排名/快照
 	foods   map[string]*Food
+	ejected map[string]*EjectedMass
 
 	tickSeq     int64
 	snapshotSeq int64
@@ -61,6 +62,7 @@ func newRoom(id, matchID, mode string, cfg config.GameConfig, mgr *Manager, log 
 		status:  RoomLoading,
 		players: make(map[string]*Player),
 		foods:   make(map[string]*Food),
+		ejected: make(map[string]*EjectedMass),
 	}
 }
 
@@ -139,12 +141,46 @@ func (r *Room) AttachConn(userID string, conn Conn) (*protocol.EnterRoomResultDa
 	if p.Status == StatusMatched {
 		p.Status = StatusReady // 已入房，等待 READY
 	}
+	reconToken := r.mgr.issueReconnect(r.id, userID)
 	return &protocol.EnterRoomResultData{
-		Success:    true,
-		RoomID:     r.id,
-		Status:     r.status,
-		ServerTime: time.Now().UnixMilli(),
+		Success:        true,
+		RoomID:         r.id,
+		Status:         r.status,
+		ServerTime:     time.Now().UnixMilli(),
+		ReconnectToken: reconToken,
 	}, true
+}
+
+// Reconnect 处理重连：重绑连接、恢复在线状态，并返回恢复快照。
+func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultData, *protocol.RoomSnapshotData, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	p, ok := r.players[userID]
+	if !ok {
+		return &protocol.ReconnectResultData{Success: false, Reason: "PLAYER_NOT_IN_ROOM", Message: "玩家不在房间"}, nil, false
+	}
+	if r.finished {
+		return &protocol.ReconnectResultData{Success: false, Reason: "ROOM_FINISHED", Message: "房间已结束"}, nil, false
+	}
+	if p.dead || p.Status == StatusExited {
+		return &protocol.ReconnectResultData{Success: false, Reason: "RECONNECT_TIMEOUT", Message: "重连超时，已退出对局"}, nil, false
+	}
+
+	if p.conn != nil {
+		p.conn.Close() // 关闭旧连接，仅保留最新连接
+	}
+	p.conn = conn
+	p.Entered = true
+	p.disconnectDeadline = 0
+	if p.alive() {
+		p.Status = StatusPlaying
+	}
+
+	recoverSnap := r.recoverSnapshotLocked()
+	return &protocol.ReconnectResultData{
+		Success: true, RoomID: r.id, Status: "RECONNECTED", Message: "重连成功",
+	}, &recoverSnap, true
 }
 
 // MarkReady 标记某个真人玩家已准备；当所有已入房的真人都准备好后开始倒计时。
@@ -196,8 +232,9 @@ func (r *Room) Disconnect(userID string, conn Conn) {
 		return
 	}
 	p.conn = nil
-	if p.alive() {
+	if p.alive() && !r.finished {
 		p.Status = StatusDisconnected
+		p.disconnectDeadline = time.Now().UnixMilli() + int64(r.mgr.cfg.Reconnect.WindowSeconds)*1000
 	}
 }
 

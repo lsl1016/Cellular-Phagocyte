@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>吞噬细胞</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!-- 对战画布：始终存在，由场景管理器控制显隐 -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- UI 覆盖层根节点：各场景的 DOM 面板挂在这里 -->
+  <div id="ui-root"></div>
+
+  <!-- 全局提示 -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="./dist/main.js"></script>
+</body>
+</html>

@@ -50,10 +50,57 @@ func (r *Room) broadcastSnapshotLocked() {
 		ServerTime: now,
 		Data: protocol.MustMarshal(protocol.RoomSnapshotData{
 			RoomID: r.id, SnapshotType: "FULL", TickSeq: r.tickSeq,
-			ServerTime: now, Players: players, Foods: foods, Events: events,
+			ServerTime: now, Players: players, Foods: foods,
+			Ejected: r.ejectedSnapshotLocked(), Events: events,
 		}),
 	}
 	r.broadcastLocked(env)
+}
+
+// ejectedSnapshotLocked 构建当前吐出物列表。
+func (r *Room) ejectedSnapshotLocked() []protocol.SnapshotEjected {
+	out := make([]protocol.SnapshotEjected, 0, len(r.ejected))
+	for _, em := range r.ejected {
+		out = append(out, protocol.SnapshotEjected{
+			EjectID: em.ID, OwnerID: em.OwnerID,
+			X: round1(em.X), Y: round1(em.Y), Radius: round1(em.Radius), Mass: em.Mass,
+		})
+	}
+	return out
+}
+
+// recoverSnapshotLocked 构建用于重连恢复的全量快照（含全部玩家与对象）。
+func (r *Room) recoverSnapshotLocked() protocol.RoomSnapshotData {
+	players := make([]protocol.SnapshotPlayer, 0, len(r.order))
+	for _, id := range r.order {
+		p := r.players[id]
+		if !p.alive() {
+			continue
+		}
+		balls := make([]protocol.Ball, 0, len(p.Balls))
+		for _, b := range p.Balls {
+			balls = append(balls, protocol.Ball{
+				BallID: b.BallID, X: round1(b.X), Y: round1(b.Y),
+				Radius: round1(b.Radius), Mass: round1(b.Mass),
+			})
+		}
+		mass := p.totalMass()
+		players = append(players, protocol.SnapshotPlayer{
+			UserID: p.UserID, Nickname: p.Nickname, Status: p.Status,
+			Score: int64(mass), Mass: round1(mass), Balls: balls,
+		})
+	}
+	foods := make([]protocol.SnapshotFood, 0, len(r.foods))
+	for _, f := range r.foods {
+		foods = append(foods, protocol.SnapshotFood{
+			FoodID: f.ID, X: round1(f.X), Y: round1(f.Y), Mass: f.Mass, Color: f.Color,
+		})
+	}
+	return protocol.RoomSnapshotData{
+		RoomID: r.id, SnapshotType: "FULL_RECOVER", TickSeq: r.tickSeq,
+		ServerTime: time.Now().UnixMilli(), Players: players, Foods: foods,
+		Ejected: r.ejectedSnapshotLocked(), Events: nil,
+	}
 }
 
 // rankedPlayersLocked 返回所有参与过对局的玩家，按 MaxMass 降序排列。

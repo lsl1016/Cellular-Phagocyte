@@ -53,10 +53,24 @@ func New(cfg config.Config, log *slog.Logger) *App {
 
 	return &App{
 		Cfg:        cfg,
-		Handler:    mux,
+		Handler:    withCORS(mux),
 		Users:      users,
 		Match:      matchSvc,
 		Game:       mgr,
 		Settlement: settleSvc,
 	}
+}
+
+// withCORS 允许浏览器客户端跨域调用 API，并直接响应 OPTIONS 预检请求。
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

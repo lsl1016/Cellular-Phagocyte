@@ -1,0 +1,132 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b1020;
+  color: #e6ecff;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  user-select: none;
+}
+
+#game-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+#ui-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 各面板默认接收事件；游戏内 HUD 子元素按需放开 */
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  pointer-events: auto;
+}
+
+.panel.centered { text-align: center; }
+
+.card {
+  background: rgba(18, 26, 51, 0.92);
+  border: 1px solid #2b3a66;
+  border-radius: 14px;
+  padding: 28px 32px;
+  min-width: 300px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.title { font-size: 26px; font-weight: 700; text-align: center; letter-spacing: 2px; }
+.subtitle { font-size: 14px; color: #93a0c8; text-align: center; }
+
+.btn {
+  appearance: none;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #4f7cff, #6a5bff);
+  cursor: pointer;
+  transition: transform 0.06s ease, opacity 0.2s ease;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.secondary { background: #2b3a66; }
+.btn.danger { background: #c0392b; }
+
+.row { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.muted { color: #93a0c8; font-size: 13px; }
+.big { font-size: 22px; font-weight: 700; }
+
+/* 游戏内 HUD */
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.hud .top-left {
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(10,16,32,0.55); border-radius: 10px; padding: 8px 12px;
+  font-size: 13px; line-height: 1.6;
+}
+.hud .rank {
+  position: absolute; top: 12px; right: 12px;
+  background: rgba(10,16,32,0.55); border-radius: 10px; padding: 8px 12px;
+  font-size: 13px; min-width: 180px;
+}
+.hud .rank h4 { font-size: 13px; margin-bottom: 4px; color: #ffd479; }
+.hud .rank .me { color: #6ad1ff; }
+.hud .timer {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  background: rgba(10,16,32,0.55); border-radius: 10px; padding: 6px 14px;
+  font-size: 18px; font-weight: 700;
+}
+
+.skills {
+  position: absolute; right: 18px; bottom: 24px;
+  display: flex; gap: 12px; pointer-events: auto;
+}
+.skills .skill {
+  width: 64px; height: 64px; border-radius: 50%;
+  border: none; color: #fff; font-size: 13px; font-weight: 700;
+  cursor: pointer; opacity: 0.9;
+}
+.skills .split { background: linear-gradient(135deg,#4f7cff,#6a5bff); }
+.skills .eject { background: linear-gradient(135deg,#2bbf6a,#1f9e87); }
+.hint {
+  position: absolute; left: 12px; bottom: 16px;
+  font-size: 12px; color: #93a0c8; background: rgba(10,16,32,0.5);
+  padding: 6px 10px; border-radius: 8px;
+}
+
+.toast {
+  position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.8); border: 1px solid #2b3a66;
+  padding: 10px 18px; border-radius: 10px; font-size: 14px;
+  pointer-events: none; z-index: 50;
+}
+.hidden { display: none !important; }
+
+.kv { display: flex; justify-content: space-between; font-size: 15px; }
+.kv .k { color: #93a0c8; }
+.spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 3px solid #2b3a66; border-top-color: #6a5bff;
+  animation: spin 0.8s linear infinite; margin: 6px auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

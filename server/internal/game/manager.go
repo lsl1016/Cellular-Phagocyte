@@ -41,9 +41,10 @@ type Manager struct {
 	log     *slog.Logger
 	settler Settler
 
-	mu     sync.RWMutex
-	rooms  map[string]*Room
-	tokens map[string]tokenEntry
+	mu          sync.RWMutex
+	rooms       map[string]*Room
+	tokens      map[string]tokenEntry // 入房凭证
+	reconTokens map[string]tokenEntry // 重连凭证
 }
 
 // Settler 负责发放结算奖励，由结算服务实现。
@@ -54,11 +55,12 @@ type Settler interface {
 // NewManager 创建一个游戏管理器。
 func NewManager(cfg config.Config, users *user.Service, log *slog.Logger) *Manager {
 	return &Manager{
-		cfg:    cfg,
-		users:  users,
-		log:    log,
-		rooms:  make(map[string]*Room),
-		tokens: make(map[string]tokenEntry),
+		cfg:         cfg,
+		users:       users,
+		log:         log,
+		rooms:       make(map[string]*Room),
+		tokens:      make(map[string]tokenEntry),
+		reconTokens: make(map[string]tokenEntry),
 	}
 }
 
@@ -114,6 +116,34 @@ func (m *Manager) ValidateEnterToken(token, roomID, userID string) (*Room, bool)
 	return r, true
 }
 
+// issueReconnect 为玩家签发重连凭证。
+func (m *Manager) issueReconnect(roomID, userID string) string {
+	tok := idgen.Token()
+	m.mu.Lock()
+	m.reconTokens[tok] = tokenEntry{
+		roomID:   roomID,
+		userID:   userID,
+		expireAt: time.Now().UnixMilli() + m.cfg.Reconnect.TokenTTLMs,
+	}
+	m.mu.Unlock()
+	return tok
+}
+
+// ValidateReconnectToken 校验重连凭证归属与有效期。
+func (m *Manager) ValidateReconnectToken(token, roomID, userID string) (*Room, bool) {
+	m.mu.RLock()
+	te, ok := m.reconTokens[token]
+	r := m.rooms[te.roomID]
+	m.mu.RUnlock()
+	if !ok || te.roomID != roomID || te.userID != userID {
+		return nil, false
+	}
+	if time.Now().UnixMilli() > te.expireAt || r == nil {
+		return nil, false
+	}
+	return r, true
+}
+
 // Room 按 id 返回房间。
 func (m *Manager) Room(roomID string) (*Room, bool) {
 	m.mu.RLock()
@@ -129,6 +159,11 @@ func (m *Manager) removeRoom(roomID string) {
 	for tok, te := range m.tokens {
 		if te.roomID == roomID {
 			delete(m.tokens, tok)
+		}
+	}
+	for tok, te := range m.reconTokens {
+		if te.roomID == roomID {
+			delete(m.reconTokens, tok)
 		}
 	}
 	m.mu.Unlock()

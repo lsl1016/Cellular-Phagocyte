@@ -30,6 +30,9 @@ const (
 	TypeSettlementResult = "SETTLEMENT_RESULT"
 	TypePong             = "PONG"
 	TypeError            = "ERROR"
+	TypeSkillFailed      = "SKILL_FAILED"
+	TypeReconnectResult  = "RECONNECT_RESULT"
+	TypeRoomRecover      = "ROOM_RECOVER_SNAPSHOT"
 )
 
 // Envelope 是每条 WebSocket 消息的外层信封。
@@ -50,12 +53,36 @@ type EnterRoomData struct {
 
 // EnterRoomResultData 是 ENTER_ROOM_RESULT 负载（服务端 -> 客户端）。
 type EnterRoomResultData struct {
-	Success    bool   `json:"success"`
-	RoomID     string `json:"roomId,omitempty"`
-	Status     string `json:"status,omitempty"`
-	ServerTime int64  `json:"serverTime,omitempty"`
-	ErrorCode  int    `json:"errorCode,omitempty"`
-	Message    string `json:"message,omitempty"`
+	Success        bool   `json:"success"`
+	RoomID         string `json:"roomId,omitempty"`
+	Status         string `json:"status,omitempty"`
+	ServerTime     int64  `json:"serverTime,omitempty"`
+	ReconnectToken string `json:"reconnectToken,omitempty"`
+	ErrorCode      int    `json:"errorCode,omitempty"`
+	Message        string `json:"message,omitempty"`
+}
+
+// ReconnectData 是 RECONNECT 请求负载（客户端 -> 服务端）。
+type ReconnectData struct {
+	RoomID         string `json:"roomId"`
+	UserID         string `json:"userId"`
+	ReconnectToken string `json:"reconnectToken"`
+}
+
+// ReconnectResultData 是 RECONNECT_RESULT 负载（服务端 -> 客户端）。
+type ReconnectResultData struct {
+	Success bool   `json:"success"`
+	RoomID  string `json:"roomId,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// SkillFailedData 是 SKILL_FAILED 负载（分裂/吐球失败）。
+type SkillFailedData struct {
+	SkillType string `json:"skillType"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message"`
 }
 
 // ReadyData 是 READY 负载（客户端 -> 服务端）。
@@ -99,6 +126,16 @@ type SnapshotFood struct {
 	Color  string  `json:"color"`
 }
 
+// SnapshotEjected 是 ROOM_SNAPSHOT 中的一个吐出物条目。
+type SnapshotEjected struct {
+	EjectID string  `json:"ejectId"`
+	OwnerID string  `json:"ownerId"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Radius  float64 `json:"radius"`
+	Mass    float64 `json:"mass"`
+}
+
 // SnapshotEvent 是一个 Tick 内产生的游戏事件。
 type SnapshotEvent struct {
 	Type string          `json:"type"`
@@ -107,13 +144,14 @@ type SnapshotEvent struct {
 
 // RoomSnapshotData 是 ROOM_SNAPSHOT 负载。
 type RoomSnapshotData struct {
-	RoomID       string           `json:"roomId"`
-	SnapshotType string           `json:"snapshotType"`
-	TickSeq      int64            `json:"tickSeq"`
-	ServerTime   int64            `json:"serverTime"`
-	Players      []SnapshotPlayer `json:"players"`
-	Foods        []SnapshotFood   `json:"foods"`
-	Events       []SnapshotEvent  `json:"events"`
+	RoomID       string            `json:"roomId"`
+	SnapshotType string            `json:"snapshotType"`
+	TickSeq      int64             `json:"tickSeq"`
+	ServerTime   int64             `json:"serverTime"`
+	Players      []SnapshotPlayer  `json:"players"`
+	Foods        []SnapshotFood    `json:"foods"`
+	Ejected      []SnapshotEjected `json:"ejected"`
+	Events       []SnapshotEvent   `json:"events"`
 }
 
 // RankEntry 是局内排行榜的一行。
