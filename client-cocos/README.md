@@ -3,6 +3,8 @@
 Cocos Creator 3.8.x + TypeScript 实现，从 Canvas 2D 客户端（`../client`）升级而来。
 协议/状态/网络层与旧实现保持一致，渲染/UI/输入层全部重写为 Cocos 节点系统。
 
+> 迁移计划、里程碑完成情况、踩坑记录见 [MIGRATION.md](./MIGRATION.md)。
+
 ## 架构
 
 ```
@@ -11,7 +13,7 @@ assets/scripts/
 │   ├── config / logger / storage
 │   ├── protocol/  # WS + HTTP 协议模型（与旧客户端同源）
 │   └── state/     # GameState（服务端快照为准）
-├── net/           # HttpClient(XHR) / ApiService / WsClient
+├── net/           # HttpClient(fetch优先/XHR兜底) / ApiService / WsClient
 ├── app/           # ScreenCtx / SceneManager（单场景面板式导航）
 ├── ui/            # 主题 / 程序化纹理 / UI 构建器 / Toast
 ├── battle/        # BattleManager / EntityManager / 节点池 / 相机 / 输入
