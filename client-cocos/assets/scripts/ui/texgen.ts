@@ -31,6 +31,10 @@ function makeSpriteFrame(
   tex.image = img;
   const sf = new SpriteFrame();
   sf.texture = tex;
+  // 内存纹理不能参与动态合图（动态图集复制路径 texSubImage2D 不支持
+  // Uint8Array 源，会抛 Overload resolution failed）。
+  // 所有实体本就共享同一张纹理 + 同材质，渲染器仍会自动合批，无性能损失。
+  sf.packable = false;
   return sf;
 }
 
