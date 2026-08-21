@@ -4,19 +4,7 @@
 
 import { Node } from 'cc';
 import { config } from '../core/config';
-
-/** 纯函数：根据质量计算缩放比例。质量越大 scale 越小，视野越大。 */
-export function zoomForMass(
-  mass: number,
-  baseMass: number,
-  baseScale: number,
-  minScale = 0.25,
-  maxScale = 2.5,
-): number {
-  const m = Math.max(mass, baseMass);
-  const scale = baseScale * Math.sqrt(baseMass / m);
-  return Math.min(maxScale, Math.max(minScale, scale));
-}
+import { frameRateAdjusted } from '../core/math';
 
 export interface WorldRect {
   x0: number;
@@ -65,9 +53,4 @@ export class WorldCamera {
       y1: this.y + halfH,
     };
   }
-}
-
-/** 把"每帧 @60fps 的 lerp 系数"换算为任意帧率下的等效系数。 */
-export function frameRateAdjusted(base: number, dt: number): number {
-  return 1 - Math.pow(1 - base, dt * 60);
 }

@@ -10,7 +10,8 @@ import type { GameState } from '../core/state/game-state';
 import { circleTexture } from '../ui/texgen';
 import { colorForUserId, parseFoodColor, theme } from '../ui/theme';
 import { NodePool } from './object-pool';
-import { frameRateAdjusted, WorldCamera } from './camera';
+import { WorldCamera } from './camera';
+import { frameRateAdjusted } from '../core/math';
 
 interface BallEntry {
   key: string;

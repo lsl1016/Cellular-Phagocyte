@@ -19,7 +19,8 @@ import type {
   SkillFailedData,
 } from '../core/protocol/messages';
 import { GameState } from '../core/state/game-state';
-import { WorldCamera, zoomForMass } from './camera';
+import { WorldCamera } from './camera';
+import { zoomForMass } from '../core/math';
 import { InputController } from './input';
 import { EntityManager } from './entity-manager';
 

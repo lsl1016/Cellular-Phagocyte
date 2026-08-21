@@ -3,17 +3,7 @@
 
 import { game, Game, input, Input, KeyCode, view } from 'cc';
 import { config } from '../core/config';
-
-/** 纯函数：屏幕中心指向指针的方向（弧度，服务端约定 Y 向下）。
- *  Cocos UI 坐标 Y 向上，故对 dy 取负。 */
-export function directionFromScreenCenter(
-  visW: number,
-  visH: number,
-  pointerX: number,
-  pointerY: number,
-): number {
-  return Math.atan2(-(pointerY - visH / 2), pointerX - visW / 2);
-}
+import { directionFromScreenCenter } from '../core/math';
 
 export interface InputCallbacks {
   move: (direction: number) => void;
