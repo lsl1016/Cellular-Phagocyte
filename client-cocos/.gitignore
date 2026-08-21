@@ -21,4 +21,5 @@ node_modules/
 #//////////////////////////
 # WebStorm
 #//////////////////////////
-.idea/dist-test/
+.idea/
+dist-test/
