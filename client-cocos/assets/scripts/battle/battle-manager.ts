@@ -20,7 +20,7 @@ import type {
 } from '../core/protocol/messages';
 import { GameState } from '../core/state/game-state';
 import { WorldCamera } from './camera';
-import { zoomForMass } from '../core/math';
+import { clampCameraToMap, zoomForMass } from '../core/math';
 import { InputController } from './input';
 import { EntityManager } from './entity-manager';
 
@@ -133,11 +133,17 @@ export class BattleManager {
       this.baseScale * 0.12,
       this.baseScale,
     );
+    // 镜头不越出地图边界（文档要求；可见范围大于地图时居中）
+    const vs = view.getVisibleSize();
+    const [cx2, cy2] = clampCameraToMap(
+      cx, cy, scale, vs.width, vs.height,
+      config.worldWidth, config.worldHeight,
+    );
     if (this.firstFrame) {
-      this.camera.snap(cx, cy, scale);
+      this.camera.snap(cx2, cy2, scale);
       this.firstFrame = false;
     } else {
-      this.camera.follow(cx, cy, scale, 0.15, dt);
+      this.camera.follow(cx2, cy2, scale, 0.15, dt);
     }
   }
 

@@ -236,7 +236,11 @@ async function run() {
     assert.ok(Math.abs(d(100, 100, 100, 50)) < 1e-6, '指针在右侧应为 0');
     assert.ok(math.zoomForMass(80, 20, 4) < math.zoomForMass(20, 20, 4), '质量越大缩放应越小');
     assert.ok(Math.abs(math.frameRateAdjusted(0.3, 1 / 60) - 0.3) < 1e-9, '60fps 下插值系数应等于基准值');
-    log('纯函数断言通过（方向 / 缩放 / 帧率换算）');
+    const c = math.clampCameraToMap;
+    assert.deepEqual(c(-500, 2000, 1, 1280, 720, 4000, 4000), [640, 2000], '左边界应 clamp 到 halfW');
+    assert.deepEqual(c(2000, -500, 1, 1280, 720, 4000, 4000), [2000, 360], '下边界应 clamp 到 halfH');
+    assert.deepEqual(c(2000, 2000, 0.1, 1280, 720, 4000, 4000), [2000, 2000], '可见范围大于地图时应居中');
+    log('纯函数断言通过（方向 / 缩放 / 帧率换算 / 相机边界）');
 
     await testFullLoopAndSkills();
     await testReconnect();

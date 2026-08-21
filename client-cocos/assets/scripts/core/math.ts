@@ -31,3 +31,29 @@ export function directionFromScreenCenter(
 ): number {
   return Math.atan2(-(pointerY - visH / 2), pointerX - visW / 2);
 }
+
+/**
+ * 相机位置 clamp 到地图边界：靠近边缘时镜头不越出地图。
+ * 若当前缩放下可见范围大于整张地图，则居中显示。
+ */
+export function clampCameraToMap(
+  cx: number,
+  cy: number,
+  scale: number,
+  visW: number,
+  visH: number,
+  worldW: number,
+  worldH: number,
+): [number, number] {
+  const halfW = visW / 2 / scale;
+  const halfH = visH / 2 / scale;
+  const x =
+    halfW * 2 >= worldW
+      ? worldW / 2
+      : Math.min(Math.max(cx, halfW), worldW - halfW);
+  const y =
+    halfH * 2 >= worldH
+      ? worldH / 2
+      : Math.min(Math.max(cy, halfH), worldH - halfH);
+  return [x, y];
+}
