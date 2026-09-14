@@ -31,9 +31,9 @@ func TestSendReliableClosesInsteadOfDroppingOnOverflow(t *testing.T) {
 	c := newWSConn(nil)
 
 	for i := 0; i < reliableBuffer; i++ {
-		c.Send(protocol.Envelope{Type: protocol.TypeSettlement, Seq: int64(i + 1)})
+		c.Send(protocol.Envelope{Type: protocol.TypeSettlementResult, Seq: int64(i + 1)})
 	}
-	c.Send(protocol.Envelope{Type: protocol.TypeSettlement, Seq: int64(reliableBuffer + 1)})
+	c.Send(protocol.Envelope{Type: protocol.TypeSettlementResult, Seq: int64(reliableBuffer + 1)})
 
 	select {
 	case <-c.done:
