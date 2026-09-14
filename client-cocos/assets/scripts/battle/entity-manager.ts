@@ -1,12 +1,14 @@
 // 实体管理器：快照 diff -> 创建/更新/回收节点。
-// - 球体：插值平滑（display lerp 向 snapshot 目标）
-// - 食物/吐出物：直接使用快照位置
+// - 自身球体：继续追最新权威状态，避免额外插值延迟
+// - 远端球体/吐出物：进入、移动、离开都按 SnapshotBuffer 的服务端时间轴
+// - 食物：直接使用最新快照位置
 // - 视野裁剪：可见矩形外的节点 active=false
 // - 排序：按质量升序设置渲染顺序（小者先画、大者覆盖）
 
 import { Color, Graphics, Label, Layers, Node, Sprite, UITransform } from 'cc';
 import { config } from '../core/config';
 import type { GameState } from '../core/state/game-state';
+import type { SnapshotMotionSample } from '../core/state/snapshot-buffer';
 import { circleTexture } from '../ui/texgen';
 import { colorForUserId, parseFoodColor, theme } from '../ui/theme';
 import { NodePool } from './object-pool';
@@ -19,6 +21,8 @@ interface BallEntry {
   body: Node | null;   // 自身时为根节点内的身体圆（覆盖描边）
   nameLabel: Node | null;
   massLabel: Node | null;
+  isSelf: boolean;
+  authoritativePresent: boolean;
   tx: number;
   ty: number;
   tr: number;
@@ -34,6 +38,7 @@ interface SimpleEntry {
   tx: number;
   ty: number;
   radius: number;
+  authoritativePresent: boolean;
 }
 
 function newCircleNode(color: Color, diameter: number): Node {
@@ -144,12 +149,16 @@ export class EntityManager {
             body: null,
             nameLabel: null,
             massLabel: null,
+            isSelf,
+            authoritativePresent: true,
             tx: b.x, ty: b.y, tr: b.radius,
             dx: b.x, dy: b.y, dr: b.radius,
             mass: b.mass,
           };
           this.balls.set(b.ballId, e);
         }
+        e.isSelf = isSelf;
+        e.authoritativePresent = true;
         e.tx = b.x;
         e.ty = b.y;
         e.tr = b.radius;
@@ -189,10 +198,14 @@ export class EntityManager {
       }
     }
     for (const [key, e] of this.balls) {
-      if (!seen.has(key)) {
-        e.node.removeFromParent();
-        this.ballPool.put(e.node);
-        this.balls.delete(key);
+      if (seen.has(key)) continue;
+      if (e.isSelf) {
+        // 自身不走延迟时间轴，权威状态一旦消失就立即回收。
+        this.releaseBall(key, e);
+      } else {
+        // 远端离开/被吞噬要等 render target 跨过对应服务端快照后再回收。
+        e.authoritativePresent = false;
+        all.push({ key, mass: e.mass });
       }
     }
 
@@ -217,9 +230,10 @@ export class EntityManager {
       if (!e) {
         const node = this.simplePool.get();
         this.foodLayer.addChild(node);
-        e = { key: f.foodId, node, tx: f.x, ty: f.y, radius: 5 };
+        e = { key: f.foodId, node, tx: f.x, ty: f.y, radius: 5, authoritativePresent: true };
         this.foods.set(f.foodId, e);
       }
+      e.authoritativePresent = true;
       e.tx = f.x;
       e.ty = f.y;
       e.node.getComponent(Sprite)!.color = parseFoodColor(f.color);
@@ -240,9 +254,10 @@ export class EntityManager {
       if (!e) {
         const node = this.simplePool.get();
         this.ejectedLayer.addChild(node);
-        e = { key: ej.ejectId, node, tx: ej.x, ty: ej.y, radius: ej.radius };
+        e = { key: ej.ejectId, node, tx: ej.x, ty: ej.y, radius: ej.radius, authoritativePresent: true };
         this.ejects.set(ej.ejectId, e);
       }
+      e.authoritativePresent = true;
       e.tx = ej.x;
       e.ty = ej.y;
       e.radius = ej.radius;
@@ -250,27 +265,58 @@ export class EntityManager {
     }
     for (const [key, e] of this.ejects) {
       if (!seenEjects.has(key)) {
-        e.node.removeFromParent();
-        this.simplePool.put(e.node);
-        this.ejects.delete(key);
+        e.authoritativePresent = false;
       }
     }
   }
 
-  /** 每帧：位置/半径插值 + 标签布局 + 视野裁剪。 */
-  update(dt: number, camera: WorldCamera, visW: number, visH: number): void {
+  /** 每帧：时间轴插值/自身追帧 + 标签布局 + 视野裁剪。 */
+  update(
+    dt: number,
+    camera: WorldCamera,
+    visW: number,
+    visH: number,
+    motion: SnapshotMotionSample | null = null,
+  ): void {
     const rect = camera.visibleRect(visW, visH);
 
-    for (const e of this.balls.values()) {
-      const f = frameRateAdjusted(0.3, dt);
-      e.dx += (e.tx - e.dx) * f;
-      e.dy += (e.ty - e.dy) * f;
-      e.dr += (e.tr - e.dr) * f;
+    for (const [key, e] of this.balls) {
+      if (!e.isSelf && motion) {
+        const sampled = motion.ball(e.key);
+        if (!sampled) {
+          if (!e.authoritativePresent) this.releaseBall(key, e);
+          else e.node.active = false; // 新实体在其服务端时间点真正到达前暂不显示。
+          continue;
+        }
+        e.dx = sampled.x;
+        e.dy = sampled.y;
+        e.dr = sampled.radius;
+      } else {
+        if (!e.isSelf && !e.authoritativePresent) {
+          this.releaseBall(key, e);
+          continue;
+        }
+        // 自身仍追最新权威目标，不人为增加 SnapshotBuffer 的 150ms 延迟。
+        const f = frameRateAdjusted(0.3, dt);
+        e.dx += (e.tx - e.dx) * f;
+        e.dy += (e.ty - e.dy) * f;
+        e.dr += (e.tr - e.dr) * f;
+      }
+
       const visible = e.dx >= rect.x0 && e.dx <= rect.x1 && e.dy >= rect.y0 && e.dy <= rect.y1;
       e.node.active = visible;
       if (!visible) continue;
 
       e.node.setPosition(e.dx, config.worldHeight - e.dy, 0);
+
+      // 半径也在帧间平滑变化，避免吞噬后视觉尺寸直接跳到新快照值。
+      const d = e.dr * 2;
+      if (e.isSelf) {
+        e.node.getComponent(UITransform)!.setContentSize(d + 8, d + 8);
+        e.body?.getComponent(UITransform)?.setContentSize(d, d);
+      } else {
+        e.node.getComponent(UITransform)!.setContentSize(d, d);
+      }
 
       // 标签：按显示半径决定字号与显隐（世界单位，随相机缩放）
       const showLabels = e.dr * camera.scale > 14;
@@ -304,14 +350,45 @@ export class EntityManager {
       e.node.getComponent(UITransform)!.setContentSize(10, 10);
     }
 
-    for (const e of this.ejects.values()) {
-      const visible = e.tx >= rect.x0 && e.tx <= rect.x1 && e.ty >= rect.y0 && e.ty <= rect.y1;
+    for (const [key, e] of this.ejects) {
+      let x = e.tx;
+      let y = e.ty;
+      let radius = e.radius;
+      if (motion) {
+        const sampled = motion.ejected(e.key);
+        if (!sampled) {
+          if (!e.authoritativePresent) this.releaseEjected(key, e);
+          else e.node.active = false;
+          continue;
+        }
+        x = sampled.x;
+        y = sampled.y;
+        radius = sampled.radius;
+      } else if (!e.authoritativePresent) {
+        this.releaseEjected(key, e);
+        continue;
+      }
+      const visible = x >= rect.x0 && x <= rect.x1 && y >= rect.y0 && y <= rect.y1;
       e.node.active = visible;
       if (!visible) continue;
-      e.node.setPosition(e.tx, config.worldHeight - e.ty, 0);
-      const d = Math.max(6, e.radius * 2);
+      e.node.setPosition(x, config.worldHeight - y, 0);
+      const d = Math.max(6, radius * 2);
       e.node.getComponent(UITransform)!.setContentSize(d, d);
     }
+  }
+
+  private releaseBall(key: string, e: BallEntry): void {
+    e.node.removeFromParent();
+    this.ballPool.put(e.node);
+    this.balls.delete(key);
+    const idx = this.sortedBallKeys.indexOf(key);
+    if (idx >= 0) this.sortedBallKeys.splice(idx, 1);
+  }
+
+  private releaseEjected(key: string, e: SimpleEntry): void {
+    e.node.removeFromParent();
+    this.simplePool.put(e.node);
+    this.ejects.delete(key);
   }
 
   /** 断线重连/重开时全量重建。 */

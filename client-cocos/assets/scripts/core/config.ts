@@ -7,6 +7,8 @@ export interface ClientConfig {
   wsUrl: string;
   /** MOVE 输入发送间隔（毫秒） */
   inputSendIntervalMs: number;
+  /** 远端实体按服务端快照时间轴渲染时的延迟（毫秒） */
+  snapshotInterpolationDelayMs: number;
   /** 世界尺寸（与服务端默认地图对齐，仅用于绘制网格与边界） */
   worldWidth: number;
   worldHeight: number;
@@ -37,6 +39,7 @@ export const config: ClientConfig = {
   apiBase,
   wsUrl: resolveWsUrl(apiBase),
   inputSendIntervalMs: 80,
+  snapshotInterpolationDelayMs: 150,
   worldWidth: 4000,
   worldHeight: 4000,
   playerBaseMass: 20,
