@@ -58,6 +58,13 @@ type MatchConfig struct {
 	EnterTokenTTLMs int64
 }
 
+// SecurityConfig 保存浏览器来源与 WebSocket 输入边界。
+type SecurityConfig struct {
+	AllowedOrigins       []string // 允许的跨域 Origin 精确列表；"*" 仅用于显式兼容模式
+	AllowLoopbackOrigins bool     // 本地开发允许 localhost/127.0.0.1/::1 的任意端口
+	WSReadLimitBytes     int64    // 单条 WebSocket 消息最大字节数
+}
+
 // 存储后端取值。
 const (
 	StorageMemory = "memory"
@@ -74,6 +81,7 @@ type Config struct {
 	Game      GameConfig
 	Match     MatchConfig
 	Reconnect ReconnectConfig
+	Security  SecurityConfig
 }
 
 // Default 返回 MVP 默认配置。
@@ -130,6 +138,11 @@ func Default() Config {
 		Reconnect: ReconnectConfig{
 			WindowSeconds: 30,
 			TokenTTLMs:    600000,
+		},
+		Security: SecurityConfig{
+			AllowedOrigins:       nil,
+			AllowLoopbackOrigins: true,
+			WSReadLimitBytes:     64 << 10, // 64 KiB，当前协议消息远小于此值。
 		},
 	}
 }

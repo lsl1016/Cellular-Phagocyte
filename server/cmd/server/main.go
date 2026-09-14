@@ -6,10 +6,20 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"cellular-phagocyte/server/internal/app"
 	"cellular-phagocyte/server/internal/config"
 	"cellular-phagocyte/server/internal/logx"
+)
+
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 15 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpMaxHeaderBytes    = 1 << 20
 )
 
 func main() {
@@ -27,6 +37,14 @@ func main() {
 		cfg.RedisAddr = addr
 	}
 
+	// 浏览器来源与 WebSocket 输入边界。生产环境建议显式配置 ALLOWED_ORIGINS，
+	// 并关闭 loopback 兼容；本地开发默认允许 localhost/127.0.0.1/::1 任意端口。
+	if origins := os.Getenv("ALLOWED_ORIGINS"); origins != "" {
+		cfg.Security.AllowedOrigins = splitCSV(origins)
+	}
+	cfg.Security.AllowLoopbackOrigins = envBool("ALLOW_LOOPBACK_ORIGINS", cfg.Security.AllowLoopbackOrigins)
+	cfg.Security.WSReadLimitBytes = envInt64("WS_READ_LIMIT_BYTES", cfg.Security.WSReadLimitBytes)
+
 	// 便于本地联调/测试的可选时间参数覆盖。
 	cfg.Game.BattleDurationSeconds = envInt("GAME_BATTLE_SECONDS", cfg.Game.BattleDurationSeconds)
 	cfg.Game.CountdownSeconds = envInt("GAME_COUNTDOWN_SECONDS", cfg.Game.CountdownSeconds)
@@ -42,10 +60,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	srv := newHTTPServer(cfg.HTTPAddr, a.Handler)
 	log.Info("server_start", "addr", cfg.HTTPAddr, "wsPath", cfg.WSPath)
-	if err := http.ListenAndServe(cfg.HTTPAddr, a.Handler); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("server_stopped", "err", err)
 		os.Exit(1)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
 	}
 }
 
@@ -57,4 +88,33 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func envInt64(key string, def int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if s := strings.TrimSpace(part); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
