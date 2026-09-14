@@ -23,6 +23,13 @@ type GameConfig struct {
 	BotFillCount          int     // 填充房间以便单人可玩的机器人数量
 	BotInitialMass        float64 // 机器人初始质量
 
+	// AOI 视野同步。视野半径 = BaseViewRadius + maxBallRadius * ViewRadiusFactor，
+	// 再受 MaxViewRadius 上限约束；当前玩家自身球体始终同步。
+	AOIEnabled          bool
+	BaseViewRadius      float64
+	ViewRadiusFactor    float64
+	MaxViewRadius       float64
+
 	// 分裂相关
 	MinSplitMass         float64 // 可分裂的最小质量
 	MaxSplitBalls        int     // 单个玩家最大分身数
@@ -111,6 +118,11 @@ func Default() Config {
 			FoodMass:              1,
 			BotFillCount:          8,
 			BotInitialMass:        20,
+
+			AOIEnabled:       true,
+			BaseViewRadius:   1200,
+			ViewRadiusFactor: 5,
+			MaxViewRadius:    2500,
 
 			MinSplitMass:         40,
 			MaxSplitBalls:        8,
