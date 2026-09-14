@@ -78,6 +78,16 @@ export class BattleManager {
     window.addEventListener('resize', this.onResize);
 
     this.state.reset(session.userId, session.roomId);
+    this.input?.stop();
+    this.input = null;
+    this.reconnectToken = '';
+    this.running = false;
+    this.firstFrame = true;
+    this.gameStarted = false;
+    this.gameEnded = false;
+    this.intentionalClose = false;
+    this.reconnecting = false;
+    this.reconnectResolver = null;
 
     this.cb.onStatus?.('正在进入房间...');
     await this.openConnection('enter');
@@ -89,6 +99,7 @@ export class BattleManager {
   stop(): void {
     this.running = false;
     this.intentionalClose = true;
+    this.reconnectResolver?.(false);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.input?.stop();
     this.ws.close();
@@ -141,13 +152,22 @@ export class BattleManager {
     this.reconnecting = true;
     this.input?.stop();
     for (let i = 0; i < RECONNECT_BACKOFF_MS.length; i++) {
-      if (this.intentionalClose) return;
+      if (this.intentionalClose) {
+        this.reconnecting = false;
+        return;
+      }
       await sleep(RECONNECT_BACKOFF_MS[i]);
-      if (this.intentionalClose) return;
+      if (this.intentionalClose) {
+        this.reconnecting = false;
+        return;
+      }
       this.cb.onReconnecting?.(i + 1);
+
+      // 先注册结果等待器，再发 RECONNECT，避免服务端快速响应导致 Promise 永远等到超时。
+      const resultPromise = this.waitReconnectResult(3000);
       try {
         await this.openConnection('reconnect');
-        const ok = await this.waitReconnectResult(3000);
+        const ok = await resultPromise;
         if (ok) {
           this.reconnecting = false;
           if (this.gameStarted && !this.gameEnded) this.startInput();
@@ -155,7 +175,8 @@ export class BattleManager {
           return;
         }
       } catch {
-        /* 连接失败，进入下一次退避 */
+        this.reconnectResolver?.(false);
+        await resultPromise;
       }
       this.ws.close();
     }
@@ -164,6 +185,7 @@ export class BattleManager {
   }
 
   private waitReconnectResult(timeoutMs: number): Promise<boolean> {
+    this.reconnectResolver?.(false);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.reconnectResolver = null;
@@ -192,8 +214,12 @@ export class BattleManager {
 
     this.ws.on(S2C.RECONNECT_RESULT, (data) => {
       const d = data as ReconnectResultData;
+      if (d.success && d.status === 'FINISHED') {
+        this.gameEnded = true;
+        this.input?.stop();
+      }
       this.reconnectResolver?.(d.success);
-      if (!d.success) this.cb.onError?.(d.message || '重连失败');
+      if (!d.success && d.reason !== 'ROOM_SETTLING') this.cb.onError?.(d.message || '重连失败');
     });
 
     this.ws.on(S2C.ROOM_RECOVER_SNAPSHOT, (data) => {
@@ -237,12 +263,13 @@ export class BattleManager {
   }
 
   private startInput(): void {
-    if (this.input) return;
-    this.input = new InputController(this.canvas, {
-      move: (dir) => this.ws.send(C2S.MOVE, { direction: dir, clientTime: Date.now() }),
-      split: (dir) => this.ws.send(C2S.SPLIT, { direction: dir, clientTime: Date.now() }),
-      eject: (dir) => this.ws.send(C2S.EJECT, { direction: dir, clientTime: Date.now() }),
-    });
+    if (!this.input) {
+      this.input = new InputController(this.canvas, {
+        move: (dir) => this.ws.send(C2S.MOVE, { direction: dir, clientTime: Date.now() }),
+        split: (dir) => this.ws.send(C2S.SPLIT, { direction: dir, clientTime: Date.now() }),
+        eject: (dir) => this.ws.send(C2S.EJECT, { direction: dir, clientTime: Date.now() }),
+      });
+    }
     this.input.start();
   }
 
