@@ -19,6 +19,7 @@ import type {
   SkillFailedData,
 } from '../core/protocol/messages';
 import { GameState } from '../core/state/game-state';
+import { SnapshotBuffer } from '../core/state/snapshot-buffer';
 import { WorldCamera } from './camera';
 import { clampCameraToMap, zoomForMass } from '../core/math';
 import { InputController } from './input';
@@ -52,6 +53,7 @@ export class BattleManager {
   private ws = new WsClient();
   private entities: EntityManager;
   private input: InputController | null = null;
+  private snapshotBuffer = new SnapshotBuffer(config.snapshotInterpolationDelayMs);
 
   private session!: BattleSession;
   private reconnectToken = '';
@@ -74,6 +76,7 @@ export class BattleManager {
   async start(session: BattleSession): Promise<void> {
     this.session = session;
     this.state.reset(session.userId, session.roomId);
+    this.snapshotBuffer.reset();
     this.entities.reset();
     this.input?.stop();
     this.input = null;
@@ -97,6 +100,7 @@ export class BattleManager {
     this.reconnectResolver?.(false);
     this.input?.stop();
     this.ws.close();
+    this.snapshotBuffer.reset();
     this.entities.reset();
   }
 
@@ -110,13 +114,14 @@ export class BattleManager {
     if (this.input) this.ws.send(C2S.EJECT, { direction: this.input.currentDirection(), clientTime: Date.now() });
   }
 
-  /** 每帧驱动：相机跟随 + 实体插值与裁剪。由屏幕组件 update 调用。 */
+  /** 每帧驱动：自身相机追最新状态，远端实体按快照时间轴插值并做裁剪。 */
   update(dt: number): void {
     if (!this.running) return;
     this.updateCamera(dt);
     const vs = view.getVisibleSize();
+    const motion = this.snapshotBuffer.sample(Date.now());
     this.camera.apply(this.entities.worldRoot);
-    this.entities.update(dt, this.camera, vs.width, vs.height);
+    this.entities.update(dt, this.camera, vs.width, vs.height, motion);
   }
 
   private updateCamera(dt: number): void {
@@ -266,7 +271,11 @@ export class BattleManager {
     });
 
     this.ws.on(S2C.ROOM_RECOVER_SNAPSHOT, (data) => {
-      this.state.applySnapshot(data as RoomSnapshotData);
+      const d = data as RoomSnapshotData;
+      // 断线期间的时间轴不连续，必须从恢复全量快照重新起步。
+      this.snapshotBuffer.reset();
+      this.snapshotBuffer.push(d, Date.now());
+      this.state.applySnapshot(d);
       this.firstFrame = true;
       this.entities.sync(this.state);
     });
@@ -284,7 +293,9 @@ export class BattleManager {
     });
 
     this.ws.on(S2C.ROOM_SNAPSHOT, (data) => {
-      this.state.applySnapshot(data as RoomSnapshotData);
+      const d = data as RoomSnapshotData;
+      this.snapshotBuffer.push(d, Date.now());
+      this.state.applySnapshot(d);
       this.entities.sync(this.state);
     });
 
