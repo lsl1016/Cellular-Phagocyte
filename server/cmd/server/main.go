@@ -7,10 +7,19 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"cellular-phagocyte/server/internal/app"
 	"cellular-phagocyte/server/internal/config"
 	"cellular-phagocyte/server/internal/logx"
+)
+
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 15 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpMaxHeaderBytes    = 1 << 20
 )
 
 func main() {
@@ -51,10 +60,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	srv := newHTTPServer(cfg.HTTPAddr, a.Handler)
 	log.Info("server_start", "addr", cfg.HTTPAddr, "wsPath", cfg.WSPath)
-	if err := http.ListenAndServe(cfg.HTTPAddr, a.Handler); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("server_stopped", "err", err)
 		os.Exit(1)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
 	}
 }
 
