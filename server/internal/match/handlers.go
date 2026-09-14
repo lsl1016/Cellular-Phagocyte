@@ -61,14 +61,15 @@ type cancelReq struct {
 }
 
 func (h *Handlers) cancel(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.auth.AuthUser(w, r); !ok {
+	u, ok := h.auth.AuthUser(w, r)
+	if !ok {
 		return
 	}
 	var req cancelReq
 	if !httpx.DecodeJSON(w, r, &req) {
 		return
 	}
-	if !h.svc.Cancel(req.MatchID) {
+	if !h.svc.Cancel(req.MatchID, u.UserID) {
 		httpx.WriteErr(w, http.StatusBadRequest, 20003, "匹配已取消或不存在")
 		return
 	}
@@ -76,11 +77,12 @@ func (h *Handlers) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) status(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.auth.AuthUser(w, r); !ok {
+	u, ok := h.auth.AuthUser(w, r)
+	if !ok {
 		return
 	}
 	matchID := r.URL.Query().Get("matchId")
-	e, ok := h.svc.Get(matchID)
+	e, ok := h.svc.Get(matchID, u.UserID)
 	if !ok {
 		httpx.WriteErr(w, http.StatusNotFound, 20005, "匹配不存在")
 		return
