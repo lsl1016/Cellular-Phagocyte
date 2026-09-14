@@ -43,12 +43,12 @@ func (r *Room) stepLocked(snapshotEvery, rankEvery int) bool {
 	now := time.Now().UnixMilli()
 
 	r.applyInputsLocked()
-	r.botAILocked()
+	r.botAISpatialLocked()
 	r.moveLocked(dt, now)
 	r.updateEjectedLocked(dt)
-	r.eatFoodLocked()
-	r.eatEjectedLocked(now)
-	r.eatPlayersLocked()
+	r.eatFoodSpatialLocked()
+	r.eatEjectedSpatialLocked(now)
+	r.eatPlayersSpatialLocked()
 	r.mergeBallsLocked(now)
 	r.checkReconnectTimeoutLocked(now)
 	r.updateStatsLocked()
@@ -82,7 +82,7 @@ func (r *Room) applyInputsLocked() {
 	}
 }
 
-// botAILocked 让每个机器人朝最近的食物移动。
+// botAILocked 是原始全量扫描实现，保留用于行为回归测试。
 func (r *Room) botAILocked() {
 	for _, id := range r.order {
 		p := r.players[id]
@@ -144,7 +144,7 @@ func (r *Room) updateEjectedLocked(dt float64) {
 	}
 }
 
-// eatEjectedLocked 处理玩家球体吞噬吐出物。
+// eatEjectedLocked 是原始全量扫描实现，保留用于行为回归测试。
 func (r *Room) eatEjectedLocked(now int64) {
 	for _, id := range r.order {
 		p := r.players[id]
@@ -231,6 +231,7 @@ func (r *Room) checkReconnectTimeoutLocked(now int64) {
 	}
 }
 
+// eatFoodLocked 是原始全量扫描实现，保留用于行为回归测试。
 func (r *Room) eatFoodLocked() {
 	foodRadius := Radius(r.cfg.FoodMass, r.cfg.RadiusFactor)
 	for _, id := range r.order {
@@ -260,6 +261,7 @@ type ballRef struct {
 	ball  *Ball
 }
 
+// eatPlayersLocked 是原始全量两两比较实现，保留用于行为回归测试。
 func (r *Room) eatPlayersLocked() {
 	var balls []ballRef
 	for _, id := range r.order {
