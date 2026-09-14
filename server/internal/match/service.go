@@ -80,8 +80,17 @@ func NewService(cfg config.MatchConfig, users *user.Service, mgr *game.Manager, 
 
 // Start 将用户加入匹配队列，返回其（可能已存在的）匹配条目。
 func (s *Service) Start(u *user.User, mode string) Entry {
-	if e, ok := s.store.ByUser(u.UserID); ok && (e.Status == StatusMatching || e.Status == StatusMatched) {
-		return e
+	if e, ok := s.store.ByUser(u.UserID); ok {
+		if e.Status == StatusMatching {
+			return e
+		}
+		if e.Status == StatusMatched {
+			// 房间仍存在时沿用当前匹配；房间已销毁时释放用户索引，允许开始下一局。
+			if _, exists := s.mgr.Room(e.RoomID); exists {
+				return e
+			}
+			s.store.DeleteUser(u.UserID)
+		}
 	}
 
 	a, _ := s.users.GetAsset(u.UserID)
@@ -99,10 +108,10 @@ func (s *Service) Start(u *user.User, mode string) Entry {
 	return e
 }
 
-// Cancel 移除一个正在匹配的条目。
-func (s *Service) Cancel(matchID string) bool {
+// Cancel 仅允许匹配条目的所属用户取消自己的正在匹配条目。
+func (s *Service) Cancel(matchID, userID string) bool {
 	e, ok := s.store.ByMatch(matchID)
-	if !ok || e.Status != StatusMatching {
+	if !ok || e.UserID != userID || e.Status != StatusMatching {
 		return false
 	}
 	e.Status = StatusCanceled
@@ -112,9 +121,13 @@ func (s *Service) Cancel(matchID string) bool {
 	return true
 }
 
-// Get 按 id 返回匹配条目。
-func (s *Service) Get(matchID string) (Entry, bool) {
-	return s.store.ByMatch(matchID)
+// Get 按 id 返回当前用户自己的匹配条目。
+func (s *Service) Get(matchID, userID string) (Entry, bool) {
+	e, ok := s.store.ByMatch(matchID)
+	if !ok || e.UserID != userID {
+		return Entry{}, false
+	}
+	return e, true
 }
 
 func (s *Service) loop() {
@@ -122,7 +135,9 @@ func (s *Service) loop() {
 	if interval <= 0 {
 		interval = 500 * time.Millisecond
 	}
-	for range time.Tick(interval) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
 		s.scan()
 	}
 }
@@ -135,6 +150,9 @@ func (s *Service) scan() {
 	}
 
 	for mode, waiting := range byMode {
+		if len(waiting) == 0 {
+			continue
+		}
 		sort.Slice(waiting, func(i, j int) bool {
 			return waiting[i].JoinedAt < waiting[j].JoinedAt
 		})
