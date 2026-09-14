@@ -28,6 +28,8 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build ./cmd/server
+      - name: Benchmark smoke
+        run: go test ./internal/game -run '^$' -bench BenchmarkRoomTick -benchmem -benchtime=10x
 
   cocos-core-smoke:
     name: Cocos core smoke
