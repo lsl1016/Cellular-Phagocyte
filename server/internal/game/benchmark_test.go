@@ -11,22 +11,27 @@ import (
 	"cellular-phagocyte/server/internal/protocol"
 )
 
-// benchmarkConn 只消费消息，不做网络 IO。额外实现 SendSnapshot，既兼容当前 Conn，
-// 也兼容后续“可靠控制消息 / latest-only snapshot”分离后的 Conn 接口。
+// benchmarkConn 只消费消息，不做网络 IO。
+// snapshotDataBytes 统计 ROOM_SNAPSHOT data JSON 的总字节数，用于对比 AOI 与全量广播的 payload 趋势；
+// 它不包含 WebSocket frame 和 Envelope 外层字段，因此不是完整 wire bytes。
 type benchmarkConn struct {
-	sent int64
+	sent              int64
+	snapshotDataBytes int64
 }
 
-func (c *benchmarkConn) Send(protocol.Envelope)         { c.sent++ }
-func (c *benchmarkConn) SendSnapshot(protocol.Envelope) { c.sent++ }
-func (c *benchmarkConn) Close()                         {}
+func (c *benchmarkConn) Send(protocol.Envelope) { c.sent++ }
+func (c *benchmarkConn) SendSnapshot(env protocol.Envelope) {
+	c.sent++
+	c.snapshotDataBytes += int64(len(env.Data))
+}
+func (c *benchmarkConn) Close() {}
 
 // BenchmarkRoomTickSimulationOnly 测量纯逻辑 Tick 热路径，不包含 snapshot/rank 构建。
-// 这是碰撞、食物扫描、吐出物扫描等算法变化最直接的趋势基线。
+// 这是碰撞、食物、吐出物扫描等算法变化最直接的趋势基线。
 func BenchmarkRoomTickSimulationOnly(b *testing.B) {
 	for _, players := range []int{10, 50, 100} {
 		b.Run(fmt.Sprintf("P%d_F500_E200", players), func(b *testing.B) {
-			r := newBenchmarkRoom(b, players, 500, 200, false)
+			r := newBenchmarkRoom(b, players, 500, 200, false, true)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -39,46 +44,81 @@ func BenchmarkRoomTickSimulationOnly(b *testing.B) {
 }
 
 // BenchmarkRoomTickProductionCadence 按默认生产节奏执行：20Hz Tick、10Hz snapshot、1Hz rank。
-// 网络 socket 写出不在房间 Tick 内，因此用 benchmarkConn 消费发送结果；JSON 构建/编码仍计入。
+// Full 与 AOI 两条基准同时保留，避免 AOI 默认开关变化导致历史 benchmark 语义漂移。
 func BenchmarkRoomTickProductionCadence(b *testing.B) {
 	for _, players := range []int{10, 50, 100} {
-		b.Run(fmt.Sprintf("P%d_F500_E200", players), func(b *testing.B) {
-			r := newBenchmarkRoom(b, players, 500, 200, true)
-			snapshotEvery := maxInt(1, r.cfg.TickRate/r.cfg.SnapshotRate)
-			rankEvery := maxInt(1, r.cfg.TickRate/r.cfg.RankUpdateRate)
+		for _, mode := range benchmarkSnapshotModes() {
+			b.Run(fmt.Sprintf("%s_P%d_F500_E200", mode.name, players), func(b *testing.B) {
+				r := newBenchmarkRoom(b, players, 500, 200, true, mode.aoiEnabled)
+				snapshotEvery := maxInt(1, r.cfg.TickRate/r.cfg.SnapshotRate)
+				rankEvery := maxInt(1, r.cfg.TickRate/r.cfg.RankUpdateRate)
 
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if ended := r.stepLocked(snapshotEvery, rankEvery); ended {
-					b.Fatal("benchmark room ended unexpectedly")
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if ended := r.stepLocked(snapshotEvery, rankEvery); ended {
+						b.Fatal("benchmark room ended unexpectedly")
+					}
 				}
-			}
-		})
+				b.StopTimer()
+				reportSnapshotDataBytes(b, r)
+			})
+		}
 	}
 }
 
-// BenchmarkRoomSnapshotAssembly 单独观察全量快照在玩家规模增长时的构建与 JSON 编码成本。
+// BenchmarkRoomSnapshotAssembly 单独观察快照对象构建与 JSON 编码成本。
+// 同一场景分别运行 Full 与 AOI，既保留 #10 建立的全量历史基线，也能持续观察 AOI 的 CPU/分配/包体收益。
 func BenchmarkRoomSnapshotAssembly(b *testing.B) {
 	for _, players := range []int{10, 50, 100} {
-		b.Run(fmt.Sprintf("P%d_F500_E200", players), func(b *testing.B) {
-			r := newBenchmarkRoom(b, players, 500, 200, true)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				r.broadcastSnapshotLocked()
-			}
-		})
+		for _, mode := range benchmarkSnapshotModes() {
+			b.Run(fmt.Sprintf("%s_P%d_F500_E200", mode.name, players), func(b *testing.B) {
+				r := newBenchmarkRoom(b, players, 500, 200, true, mode.aoiEnabled)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					r.broadcastSnapshotLocked()
+				}
+				b.StopTimer()
+				reportSnapshotDataBytes(b, r)
+			})
+		}
 	}
 }
 
-func newBenchmarkRoom(b *testing.B, playerCount, foodCount, ejectedCount int, attachConn bool) *Room {
+type benchmarkSnapshotMode struct {
+	name       string
+	aoiEnabled bool
+}
+
+func benchmarkSnapshotModes() []benchmarkSnapshotMode {
+	return []benchmarkSnapshotMode{
+		{name: "Full", aoiEnabled: false},
+		{name: "AOI", aoiEnabled: true},
+	}
+}
+
+func reportSnapshotDataBytes(b *testing.B, r *Room) {
+	if b.N <= 0 {
+		return
+	}
+	var total int64
+	for _, id := range r.order {
+		if conn, ok := r.players[id].conn.(*benchmarkConn); ok {
+			total += conn.snapshotDataBytes
+		}
+	}
+	b.ReportMetric(float64(total)/float64(b.N), "snapshot-data-bytes/op")
+}
+
+func newBenchmarkRoom(b *testing.B, playerCount, foodCount, ejectedCount int, attachConn, aoiEnabled bool) *Room {
 	b.Helper()
 
 	cfg := config.Default()
 	cfg.Game.BotFillCount = 0
 	cfg.Game.InitialFoodCount = foodCount
 	cfg.Game.MaxFoodCount = foodCount
+	cfg.Game.AOIEnabled = aoiEnabled
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := NewManager(cfg, nil, log, NewMemoryTokenStore())
@@ -116,6 +156,7 @@ func newBenchmarkRoom(b *testing.B, playerCount, foodCount, ejectedCount int, at
 	}
 
 	// 食物和吐出物集中在地图左上，避免 benchmark 自身因吞噬而持续改变数据规模。
+	// 这种布局也能稳定体现 AOI 对远端无关对象的过滤收益。
 	for i := 0; i < foodCount; i++ {
 		id := fmt.Sprintf("f_%04d", i)
 		r.foods[id] = &Food{
