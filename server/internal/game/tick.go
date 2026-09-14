@@ -43,7 +43,7 @@ func (r *Room) stepLocked(snapshotEvery, rankEvery int) bool {
 	now := time.Now().UnixMilli()
 
 	r.applyInputsLocked()
-	r.botAILocked()
+	r.botAISpatialLocked()
 	r.moveLocked(dt, now)
 	r.updateEjectedLocked(dt)
 	r.eatFoodSpatialLocked()
@@ -82,7 +82,7 @@ func (r *Room) applyInputsLocked() {
 	}
 }
 
-// botAILocked 让每个机器人朝最近的食物移动。
+// botAILocked 是原始全量扫描实现，保留用于行为回归测试。
 func (r *Room) botAILocked() {
 	for _, id := range r.order {
 		p := r.players[id]
