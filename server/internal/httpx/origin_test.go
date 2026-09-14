@@ -20,6 +20,15 @@ func TestOriginPolicyAllowsSameOriginAndNativeClients(t *testing.T) {
 	}
 }
 
+func TestOriginPolicyRejectsSameHostWithDifferentScheme(t *testing.T) {
+	p := OriginPolicy{}
+	r := httptest.NewRequest("GET", "http://api.example.com/ws", nil)
+	r.Header.Set("Origin", "https://api.example.com")
+	if p.AllowsRequest(r) {
+		t.Fatal("same host with a different scheme is not same-origin")
+	}
+}
+
 func TestOriginPolicyRejectsUnknownCrossOrigin(t *testing.T) {
 	p := OriginPolicy{}
 	r := httptest.NewRequest("GET", "http://api.example.com/ws", nil)
