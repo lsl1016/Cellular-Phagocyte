@@ -51,8 +51,8 @@ func TestAOISnapshotFiltersFarObjectsAndAlwaysIncludesSelf(t *testing.T) {
 	if nearSnap == nil || len(nearSnap.Balls) != 1 || nearSnap.Balls[0].BallID != "b_u2_near" {
 		t.Fatalf("near player should contain only the visible split ball: %+v", nearSnap)
 	}
-	if nearSnap.Mass != 25 {
-		t.Fatalf("remote visible mass = %v, want 25 from visible balls only", nearSnap.Mass)
+	if nearSnap.Mass != 50 || nearSnap.Score != 50 {
+		t.Fatalf("remote aggregate mass/score = %v/%d, want full player total 50/50", nearSnap.Mass, nearSnap.Score)
 	}
 	if snapshotPlayerByID(snap.Players, "u3") != nil {
 		t.Fatal("far player must be filtered from AOI snapshot")
