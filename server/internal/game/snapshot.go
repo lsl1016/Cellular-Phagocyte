@@ -20,12 +20,14 @@ func (r *Room) broadcastSnapshotLocked() {
 
 	if r.cfg.AOIEnabled {
 		idx := r.buildAOIIndexLocked()
+		scratch := newAOISnapshotScratch(len(r.order), idx.ballCount, len(r.foods), len(r.ejected))
 		for _, id := range r.order {
 			p := r.players[id]
 			if p == nil || p.conn == nil {
 				continue
 			}
-			data := r.aoiSnapshotForPlayerLocked(p, idx, "AOI_FULL", now, events)
+			// data 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
+			data := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, "AOI_FULL", now, events)
 			p.conn.SendSnapshot(protocol.Envelope{
 				Type:       protocol.TypeRoomSnapshot,
 				Seq:        r.snapshotSeq,
