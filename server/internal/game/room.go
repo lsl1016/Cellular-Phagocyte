@@ -201,7 +201,7 @@ func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultDat
 		p.Status = StatusPlaying
 	}
 
-	recoverSnap := r.recoverSnapshotLocked()
+	recoverSnap := r.recoverSnapshotLocked(userID)
 	return &protocol.ReconnectResultData{
 		Success: true, RoomID: r.id, Status: "RECONNECTED", Message: "重连成功",
 	}, &recoverSnap, true
