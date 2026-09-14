@@ -48,21 +48,24 @@ type Room struct {
 	finished bool
 	nextBall int
 
-	pendingEvents []protocol.SnapshotEvent
+	pendingEvents     []protocol.SnapshotEvent
+	endReason         string
+	settlementResults map[string]protocol.SettlementResultData
 }
 
 func newRoom(id, matchID, mode string, cfg config.GameConfig, mgr *Manager, log *slog.Logger) *Room {
 	return &Room{
-		mgr:     mgr,
-		log:     log,
-		cfg:     cfg,
-		id:      id,
-		matchID: matchID,
-		mode:    mode,
-		status:  RoomLoading,
-		players: make(map[string]*Player),
-		foods:   make(map[string]*Food),
-		ejected: make(map[string]*EjectedMass),
+		mgr:               mgr,
+		log:               log,
+		cfg:               cfg,
+		id:                id,
+		matchID:           matchID,
+		mode:              mode,
+		status:            RoomLoading,
+		players:           make(map[string]*Player),
+		foods:             make(map[string]*Food),
+		ejected:           make(map[string]*EjectedMass),
+		settlementResults: make(map[string]protocol.SettlementResultData),
 	}
 }
 
@@ -151,7 +154,10 @@ func (r *Room) AttachConn(userID string, conn Conn) (*protocol.EnterRoomResultDa
 	}, true
 }
 
-// Reconnect 处理重连：重绑连接、恢复在线状态，并返回恢复快照。
+// Reconnect 处理重连：
+//   - 对局中：重绑连接并返回恢复快照；
+//   - 结算中：要求客户端稍后重试，避免结算消息与 RECONNECT_RESULT 乱序；
+//   - 已结算：在资源清理宽限期内允许重绑，供网关顺序补发 GAME_END + SETTLEMENT_RESULT。
 func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultData, *protocol.RoomSnapshotData, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -161,7 +167,25 @@ func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultDat
 		return &protocol.ReconnectResultData{Success: false, Reason: "PLAYER_NOT_IN_ROOM", Message: "玩家不在房间"}, nil, false
 	}
 	if r.finished {
-		return &protocol.ReconnectResultData{Success: false, Reason: "ROOM_FINISHED", Message: "房间已结束"}, nil, false
+		switch r.status {
+		case RoomSettling:
+			return &protocol.ReconnectResultData{
+				Success: false, RoomID: r.id, Status: RoomSettling,
+				Reason: "ROOM_SETTLING", Message: "对局已结束，正在结算，请稍后重连",
+			}, nil, false
+		case RoomFinished:
+			if p.conn != nil {
+				p.conn.Close()
+			}
+			p.conn = conn
+			p.Entered = true
+			p.disconnectDeadline = 0
+			return &protocol.ReconnectResultData{
+				Success: true, RoomID: r.id, Status: RoomFinished, Message: "已恢复结算结果",
+			}, nil, true
+		default:
+			return &protocol.ReconnectResultData{Success: false, Reason: "ROOM_FINISHED", Message: "房间已结束"}, nil, false
+		}
 	}
 	if p.dead || p.Status == StatusExited {
 		return &protocol.ReconnectResultData{Success: false, Reason: "RECONNECT_TIMEOUT", Message: "重连超时，已退出对局"}, nil, false
@@ -181,6 +205,28 @@ func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultDat
 	return &protocol.ReconnectResultData{
 		Success: true, RoomID: r.id, Status: "RECONNECTED", Message: "重连成功",
 	}, &recoverSnap, true
+}
+
+// FinishedPayload 返回已完成房间的结束消息和当前用户结算结果。
+// 仅在 RoomFinished 状态返回 ok=true；返回的是值拷贝，可在解锁后安全序列化。
+func (r *Room) FinishedPayload(userID string) (protocol.GameEndData, *protocol.SettlementResultData, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.status != RoomFinished {
+		return protocol.GameEndData{}, nil, false
+	}
+
+	end := protocol.GameEndData{
+		RoomID: r.id,
+		Reason: r.endReason,
+		Message: "对局结束，结算已完成",
+	}
+	res, found := r.settlementResults[userID]
+	if !found {
+		return end, nil, true
+	}
+	copyRes := res
+	return end, &copyRes, true
 }
 
 // MarkReady 标记某个真人玩家已准备；当所有已入房的真人都准备好后开始倒计时。

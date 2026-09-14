@@ -6,8 +6,12 @@ import (
 	"cellular-phagocyte/server/internal/protocol"
 )
 
+// finishedRoomGrace 给已经完成结算但客户端恰好断线的连接留出补发窗口。
+// 客户端当前重连退避为 0s/1s/2s/...，5 秒足以覆盖前几次恢复尝试，同时不会长期占用房间内存。
+const finishedRoomGrace = 5 * time.Second
+
 // endGame 冻结房间、广播 GAME_END、执行结算、向每个玩家推送 SETTLEMENT_RESULT，
-// 最后安排资源清理。
+// 最后安排资源清理。结算结果会在 finishedRoomGrace 内保留，供极端慢客户端断线后重连补发。
 func (r *Room) endGame(reason string) {
 	r.mu.Lock()
 	if r.finished {
@@ -16,6 +20,7 @@ func (r *Room) endGame(reason string) {
 	}
 	r.finished = true
 	r.status = RoomSettling
+	r.endReason = reason
 	req := r.buildSettleRequestLocked()
 	now := time.Now().UnixMilli()
 	r.broadcastLocked(protocol.Envelope{
@@ -37,6 +42,7 @@ func (r *Room) endGame(reason string) {
 	r.mu.Lock()
 	st := time.Now().UnixMilli()
 	for _, res := range results {
+		r.settlementResults[res.UserID] = res
 		if p, ok := r.players[res.UserID]; ok && p.conn != nil {
 			p.conn.Send(protocol.Envelope{
 				Type:       protocol.TypeSettlementResult,
@@ -45,11 +51,13 @@ func (r *Room) endGame(reason string) {
 			})
 		}
 	}
+	// 必须在 settlementResults 全部写入之后再暴露 RoomFinished，
+	// 这样 finished reconnect 一旦成功就一定能读取到稳定的最终结果。
 	r.status = RoomFinished
 	r.mu.Unlock()
 
 	go func() {
-		time.Sleep(2 * time.Second)
+		time.Sleep(finishedRoomGrace)
 		r.mu.Lock()
 		for _, id := range r.order {
 			if p := r.players[id]; p.conn != nil {

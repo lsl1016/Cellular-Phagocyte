@@ -54,7 +54,12 @@ func (r *Room) broadcastSnapshotLocked() {
 			Ejected: r.ejectedSnapshotLocked(), Events: events,
 		}),
 	}
-	r.broadcastLocked(env)
+	for _, id := range r.order {
+		p := r.players[id]
+		if p.conn != nil {
+			p.conn.SendSnapshot(env)
+		}
+	}
 }
 
 // ejectedSnapshotLocked 构建当前吐出物列表。

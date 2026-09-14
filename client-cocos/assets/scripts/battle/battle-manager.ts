@@ -256,8 +256,13 @@ export class BattleManager {
 
     this.ws.on(S2C.RECONNECT_RESULT, (data) => {
       const d = data as ReconnectResultData;
+      if (d.success && d.status === 'FINISHED') {
+        // 结算恢复场景：不要在 Promise continuation 中短暂重启输入，后续会收到补发的 GAME_END/SETTLEMENT_RESULT。
+        this.gameEnded = true;
+        this.input?.stop();
+      }
       this.reconnectResolver?.(d.success);
-      if (!d.success) this.cb.onError?.(d.message || '重连失败');
+      if (!d.success && d.reason !== 'ROOM_SETTLING') this.cb.onError?.(d.message || '重连失败');
     });
 
     this.ws.on(S2C.ROOM_RECOVER_SNAPSHOT, (data) => {

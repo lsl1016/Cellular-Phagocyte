@@ -135,6 +135,7 @@ func (g *Gateway) serveReconnect(conn *wsConn, first protocol.Envelope) {
 	}
 
 	result, recoverSnap, ok := room.Reconnect(rd.UserID, conn)
+	// RECONNECT_RESULT 必须始终排在恢复快照/结算补发之前，客户端先恢复连接状态机。
 	conn.Send(protocol.Envelope{
 		Type: protocol.TypeReconnectResult,
 		Seq:  first.Seq,
@@ -150,7 +151,27 @@ func (g *Gateway) serveReconnect(conn *wsConn, first protocol.Envelope) {
 			Data:       protocol.MustMarshal(recoverSnap),
 		})
 	}
-	g.log.Info("reconnect_success", "roomId", rd.RoomID, "userId", rd.UserID)
+
+	// 极端慢客户端如果在 GAME_END / SETTLEMENT_RESULT 阶段被可靠队列断开，
+	// 可以在房间清理宽限期内重连。此处按顺序补发完整结束流程，而不是只恢复一个 finished 状态。
+	if result.Status == game.RoomFinished {
+		if end, settlement, finished := room.FinishedPayload(rd.UserID); finished {
+			conn.Send(protocol.Envelope{
+				Type:       protocol.TypeGameEnd,
+				ServerTime: time.Now().UnixMilli(),
+				Data:       protocol.MustMarshal(end),
+			})
+			if settlement != nil {
+				conn.Send(protocol.Envelope{
+					Type:       protocol.TypeSettlementResult,
+					ServerTime: time.Now().UnixMilli(),
+					Data:       protocol.MustMarshal(settlement),
+				})
+			}
+		}
+	}
+
+	g.log.Info("reconnect_success", "roomId", rd.RoomID, "userId", rd.UserID, "status", result.Status)
 
 	defer room.Disconnect(rd.UserID, conn)
 	g.readLoop(conn, room, rd.UserID)

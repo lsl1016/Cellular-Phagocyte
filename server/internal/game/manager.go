@@ -14,10 +14,12 @@ import (
 	"cellular-phagocyte/server/internal/user"
 )
 
-// Conn 是玩家消息写入的网关连接。实现必须保证 Send 非阻塞（缓冲满则丢弃），
-// 这样 Tick 循环永远不会因为慢客户端而卡住。
+// Conn 是玩家消息写入的网关连接。
+// Send 用于不能静默丢弃的控制消息；实现必须保持非阻塞，慢客户端应通过断连/重连处理反压。
+// SendSnapshot 用于高频权威快照；实现可以覆盖尚未写出的旧快照，只保留最新状态。
 type Conn interface {
 	Send(env protocol.Envelope)
+	SendSnapshot(env protocol.Envelope)
 	Close()
 }
 
