@@ -12,6 +12,12 @@ type spatialCell struct {
 type spatialGrid[T any] struct {
 	cellSize float64
 	cells    map[spatialCell][]T
+
+	hasBounds bool
+	minX      int
+	maxX      int
+	minY      int
+	maxY      int
 }
 
 func newSpatialGrid[T any](cellSize float64) *spatialGrid[T] {
@@ -34,6 +40,25 @@ func (g *spatialGrid[T]) cellFor(x, y float64) spatialCell {
 func (g *spatialGrid[T]) Insert(x, y float64, value T) {
 	key := g.cellFor(x, y)
 	g.cells[key] = append(g.cells[key], value)
+
+	if !g.hasBounds {
+		g.hasBounds = true
+		g.minX, g.maxX = key.x, key.x
+		g.minY, g.maxY = key.y, key.y
+		return
+	}
+	if key.x < g.minX {
+		g.minX = key.x
+	}
+	if key.x > g.maxX {
+		g.maxX = key.x
+	}
+	if key.y < g.minY {
+		g.minY = key.y
+	}
+	if key.y > g.maxY {
+		g.maxY = key.y
+	}
 }
 
 // QueryAABB 把与给定包围盒相交的网格单元中的元素追加到 dst。
@@ -54,4 +79,12 @@ func (g *spatialGrid[T]) QueryAABB(dst []T, minX, minY, maxX, maxY float64) []T 
 		}
 	}
 	return dst
+}
+
+func (g *spatialGrid[T]) coversOccupiedBounds(center spatialCell, ring int) bool {
+	if !g.hasBounds {
+		return true
+	}
+	return center.x-ring <= g.minX && center.x+ring >= g.maxX &&
+		center.y-ring <= g.minY && center.y+ring >= g.maxY
 }
