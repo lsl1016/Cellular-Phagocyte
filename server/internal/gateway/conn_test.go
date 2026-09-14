@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"testing"
 
 	"cellular-phagocyte/server/internal/protocol"
@@ -70,6 +71,48 @@ func TestSendSnapshotKeepsOnlyLatestPendingFrame(t *testing.T) {
 	case <-c.done:
 		t.Fatal("snapshot flood must not close the connection")
 	default:
+	}
+}
+
+func TestSendSnapshotPreservesEventsFromOverwrittenFrames(t *testing.T) {
+	c := newWSConn(nil)
+	first := protocol.RoomSnapshotData{
+		RoomID: "r1", SnapshotType: "FULL", TickSeq: 1, ServerTime: 1000,
+		Events: []protocol.SnapshotEvent{{Type: "FOOD_EATEN", Data: protocol.MustMarshal(map[string]any{"foodId": "f1"})}},
+	}
+	second := protocol.RoomSnapshotData{
+		RoomID: "r1", SnapshotType: "FULL", TickSeq: 2, ServerTime: 1100,
+		Events: []protocol.SnapshotEvent{{Type: "PLAYER_EATEN", Data: protocol.MustMarshal(map[string]any{"userId": "u2"})}},
+	}
+	third := protocol.RoomSnapshotData{
+		RoomID: "r1", SnapshotType: "FULL", TickSeq: 3, ServerTime: 1200,
+	}
+
+	c.SendSnapshot(protocol.Envelope{Type: protocol.TypeRoomSnapshot, Seq: 1, Data: protocol.MustMarshal(first)})
+	c.SendSnapshot(protocol.Envelope{Type: protocol.TypeRoomSnapshot, Seq: 2, Data: protocol.MustMarshal(second)})
+	c.SendSnapshot(protocol.Envelope{Type: protocol.TypeRoomSnapshot, Seq: 3, Data: protocol.MustMarshal(third)})
+
+	<-c.snapshotReady
+	env, ok := c.takeLatestSnapshot()
+	if !ok {
+		t.Fatal("expected coalesced snapshot")
+	}
+	if env.Seq != 3 {
+		t.Fatalf("latest state should win, got seq=%d", env.Seq)
+	}
+
+	var got protocol.RoomSnapshotData
+	if err := json.Unmarshal(env.Data, &got); err != nil {
+		t.Fatalf("decode coalesced snapshot: %v", err)
+	}
+	if got.TickSeq != 3 || got.ServerTime != 1200 {
+		t.Fatalf("latest snapshot state was not preserved: tick=%d time=%d", got.TickSeq, got.ServerTime)
+	}
+	if len(got.Events) != 2 {
+		t.Fatalf("expected both overwritten events to survive, got %d", len(got.Events))
+	}
+	if got.Events[0].Type != "FOOD_EATEN" || got.Events[1].Type != "PLAYER_EATEN" {
+		t.Fatalf("event order changed: %+v", got.Events)
 	}
 }
 
