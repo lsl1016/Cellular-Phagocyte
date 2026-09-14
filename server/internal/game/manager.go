@@ -134,24 +134,19 @@ func (m *Manager) ValidateReconnectToken(token, roomID, userID string) (*Room, b
 	return r, true
 }
 
-func (m *Manager) destroyRoom(roomID string) {
+// Room 按 id 返回房间。
+func (m *Manager) Room(roomID string) (*Room, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.rooms[roomID]
+	return r, ok
+}
+
+// removeRoom 删除已结束的房间及其凭证。
+func (m *Manager) removeRoom(roomID string) {
 	m.mu.Lock()
 	delete(m.rooms, roomID)
 	m.mu.Unlock()
-	m.tokens.DeleteRoom(roomID)
-}
-
-// HasRoom 返回房间当前是否仍由游戏服务持有。
-func (m *Manager) HasRoom(roomID string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.rooms[roomID]
-	return ok
-}
-
-// RoomCount 返回当前内存房间数（用于健康检查/测试）。
-func (m *Manager) RoomCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.rooms)
+	m.tokens.DeleteByRoom(roomID)
+	m.log.Info("room_destroy", "roomId", roomID)
 }
