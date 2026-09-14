@@ -289,23 +289,35 @@ func (r *Room) eatPlayersLocked() {
 				gain := PlayerEatGain(small.ball.Mass, r.cfg.PlayerEatMassGain)
 				big.ball.Mass += gain
 				big.ball.Radius = Radius(big.ball.Mass, r.cfg.RadiusFactor)
-				big.owner.EatPlayerCount++
 				eaten[small.ball.BallID] = true
-				r.killPlayerLocked(small.owner, big.owner.UserID, gain, big.ball.Mass)
+				if r.eatPlayerBallLocked(small.owner, small.ball, big.owner.UserID, gain, big.ball.Mass) {
+					big.owner.EatPlayerCount++
+				}
 			}
 		}
 	}
 }
 
-func (r *Room) killPlayerLocked(victim *Player, attackerID string, gain, attackerNewMass float64) {
+// eatPlayerBallLocked 只移除被吞噬的单个分身；仅当最后一个球被吞噬时才判定玩家死亡。
+// 返回 true 表示本次吞噬淘汰了目标玩家。
+func (r *Room) eatPlayerBallLocked(victim *Player, victimBall *Ball, attackerID string, gain, attackerNewMass float64) bool {
+	victim.Balls = removeBall(victim.Balls, victimBall)
+	targetDead := len(victim.Balls) == 0
+
 	r.addEvent("PLAYER_EATEN", map[string]any{
 		"attackerUserId": attackerID, "targetUserId": victim.UserID,
-		"gainMass": gain, "attackerNewMass": attackerNewMass, "targetDead": true,
+		"targetBallId": victimBall.BallID, "gainMass": gain,
+		"attackerNewMass": attackerNewMass, "targetDead": targetDead,
 	})
+
+	if !targetDead {
+		return false
+	}
+
 	r.addEvent("PLAYER_DEAD", map[string]any{"userId": victim.UserID})
 	victim.dead = true
-	victim.Balls = nil
 	victim.Status = StatusDead
+	return true
 }
 
 func (r *Room) updateStatsLocked() {

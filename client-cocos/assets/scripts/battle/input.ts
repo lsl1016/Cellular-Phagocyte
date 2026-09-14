@@ -19,6 +19,7 @@ export class InputController {
   private pointerX = 0;
   private pointerY = 0;
   private active = false;
+  private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private cb: InputCallbacks;
 
@@ -55,7 +56,10 @@ export class InputController {
     return directionFromScreenCenter(vs.width, vs.height, this.pointerX, this.pointerY);
   }
 
+  /** 启动输入监听。重复调用不会重复注册事件或创建定时器。 */
   start(): void {
+    if (this.started) return;
+    this.started = true;
     input.on(Input.EventType.MOUSE_MOVE, this.onMouseOrTouch);
     input.on(Input.EventType.TOUCH_START, this.onMouseOrTouch);
     input.on(Input.EventType.TOUCH_MOVE, this.onMouseOrTouch);
@@ -67,7 +71,11 @@ export class InputController {
     }, config.inputSendIntervalMs);
   }
 
+  /** 停止输入监听；之后可再次 start，用于断线重连恢复。 */
   stop(): void {
+    if (!this.started) return;
+    this.started = false;
+    this.active = false;
     input.off(Input.EventType.MOUSE_MOVE, this.onMouseOrTouch);
     input.off(Input.EventType.TOUCH_START, this.onMouseOrTouch);
     input.off(Input.EventType.TOUCH_MOVE, this.onMouseOrTouch);
