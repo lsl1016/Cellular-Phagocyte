@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -20,13 +21,14 @@ const (
 //
 // 消息分为两类：
 //   - Send: 可靠控制消息。保持顺序；队列溢出时主动断开慢客户端，由重连机制恢复，绝不静默丢弃。
-//   - SendSnapshot: 高频 ROOM_SNAPSHOT。只保留尚未写出的最新一帧，避免慢客户端反压 Tick。
+//   - SendSnapshot: 高频 ROOM_SNAPSHOT。状态只保留尚未写出的最新一帧，但会把被覆盖快照中的
+//     瞬时 events 合并到新快照，避免 PLAYER_EATEN / PLAYER_MERGE 等事件随旧状态一起丢失。
 type wsConn struct {
 	ws *websocket.Conn
 
 	reliable chan protocol.Envelope
 
-	snapshotMu    sync.Mutex
+	snapshotMu     sync.Mutex
 	latestSnapshot protocol.Envelope
 	hasSnapshot    bool
 	snapshotReady  chan struct{}
@@ -64,7 +66,7 @@ func (c *wsConn) Send(env protocol.Envelope) {
 }
 
 // SendSnapshot 非阻塞地更新待发送的最新快照。
-// 如果旧快照尚未写出，会被新快照覆盖；客户端最终只需要追上最新权威状态。
+// 旧状态允许被覆盖，但旧快照尚未发送的 transient events 会被顺序合并进新快照。
 func (c *wsConn) SendSnapshot(env protocol.Envelope) {
 	select {
 	case <-c.done:
@@ -73,6 +75,9 @@ func (c *wsConn) SendSnapshot(env protocol.Envelope) {
 	}
 
 	c.snapshotMu.Lock()
+	if c.hasSnapshot {
+		env = coalesceSnapshotEvents(c.latestSnapshot, env)
+	}
 	c.latestSnapshot = env
 	c.hasSnapshot = true
 	c.snapshotMu.Unlock()
@@ -82,6 +87,32 @@ func (c *wsConn) SendSnapshot(env protocol.Envelope) {
 	case c.snapshotReady <- struct{}{}:
 	default:
 	}
+}
+
+// coalesceSnapshotEvents 用 next 的最新权威状态替换 previous，但保留 previous 中还未发送的事件。
+// 如果任一负载无法解码，宁可发送 next 的最新状态，也不能因为事件合并失败阻塞 Tick。
+func coalesceSnapshotEvents(previous, next protocol.Envelope) protocol.Envelope {
+	if previous.Type != protocol.TypeRoomSnapshot || next.Type != protocol.TypeRoomSnapshot {
+		return next
+	}
+
+	var prevData protocol.RoomSnapshotData
+	if err := json.Unmarshal(previous.Data, &prevData); err != nil || len(prevData.Events) == 0 {
+		return next
+	}
+	var nextData protocol.RoomSnapshotData
+	if err := json.Unmarshal(next.Data, &nextData); err != nil {
+		return next
+	}
+
+	merged := make([]protocol.SnapshotEvent, 0, len(prevData.Events)+len(nextData.Events))
+	merged = append(merged, prevData.Events...)
+	merged = append(merged, nextData.Events...)
+	nextData.Events = merged
+	if data, err := json.Marshal(nextData); err == nil {
+		next.Data = data
+	}
+	return next
 }
 
 func (c *wsConn) takeLatestSnapshot() (protocol.Envelope, bool) {
