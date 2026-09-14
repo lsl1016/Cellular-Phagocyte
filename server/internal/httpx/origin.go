@@ -9,7 +9,7 @@ import (
 
 // OriginPolicy 为 HTTP CORS 与 WebSocket Upgrade 提供同一套来源校验规则。
 // 空 Origin 用于非浏览器客户端，允许通过；浏览器请求必须满足：
-//   - 与请求 Host 同源；或
+//   - 与请求 scheme + Host 同源；或
 //   - 命中显式 AllowedOrigins；或
 //   - 开启 AllowLoopback 且 Origin 来自本机回环地址。
 type OriginPolicy struct {
@@ -32,8 +32,11 @@ func (p OriginPolicy) AllowsRequest(r *http.Request) bool {
 		return false
 	}
 
-	// 浏览器同源判断：scheme 的差异由浏览器 Origin 语义负责，这里比较 Host:Port。
-	if strings.EqualFold(u.Host, r.Host) {
+	requestScheme := "http"
+	if r.TLS != nil {
+		requestScheme = "https"
+	}
+	if strings.EqualFold(u.Scheme, requestScheme) && strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
 
