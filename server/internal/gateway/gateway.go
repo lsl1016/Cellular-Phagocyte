@@ -11,25 +11,39 @@ import (
 	"github.com/gorilla/websocket"
 
 	"cellular-phagocyte/server/internal/game"
+	"cellular-phagocyte/server/internal/httpx"
 	"cellular-phagocyte/server/internal/protocol"
 )
 
+const defaultWSReadLimitBytes int64 = 64 << 10
+
 // Gateway 负责升级 HTTP 连接并把 WebSocket 消息路由到房间。
 type Gateway struct {
-	mgr      *game.Manager
-	log      *slog.Logger
-	upgrader websocket.Upgrader
+	mgr            *game.Manager
+	log            *slog.Logger
+	upgrader       websocket.Upgrader
+	readLimitBytes int64
 }
 
-// New 创建一个网关。
+// New 创建一个使用安全本地开发默认值的网关。
+// 浏览器仅允许同源或 loopback Origin，单条消息限制 64 KiB。
 func New(mgr *game.Manager, log *slog.Logger) *Gateway {
+	return NewWithSecurity(mgr, log, httpx.OriginPolicy{AllowLoopback: true}, defaultWSReadLimitBytes)
+}
+
+// NewWithSecurity 创建一个显式配置浏览器 Origin 与消息大小边界的网关。
+func NewWithSecurity(mgr *game.Manager, log *slog.Logger, originPolicy httpx.OriginPolicy, readLimitBytes int64) *Gateway {
+	if readLimitBytes <= 0 {
+		readLimitBytes = defaultWSReadLimitBytes
+	}
 	return &Gateway{
-		mgr: mgr,
-		log: log,
+		mgr:            mgr,
+		log:            log,
+		readLimitBytes: readLimitBytes,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
-			CheckOrigin:     func(*http.Request) bool { return true },
+			CheckOrigin:     originPolicy.AllowsRequest,
 		},
 	}
 }
@@ -51,6 +65,7 @@ func (g *Gateway) serve(conn *wsConn) {
 	defer conn.Close()
 
 	ws := conn.ws
+	ws.SetReadLimit(g.readLimitBytes)
 	_ = ws.SetReadDeadline(time.Now().Add(pongWait))
 	ws.SetPongHandler(func(string) error {
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
