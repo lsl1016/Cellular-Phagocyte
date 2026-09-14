@@ -57,6 +57,7 @@ export class InputController {
   }
 
   start(): void {
+    if (this.timer !== null) return;
     this.canvas.addEventListener('pointermove', this.onMove);
     this.canvas.addEventListener('pointerdown', this.onMove);
     window.addEventListener('keydown', this.onKey);
