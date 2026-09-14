@@ -10,6 +10,7 @@ import (
 	"cellular-phagocyte/server/internal/config"
 	"cellular-phagocyte/server/internal/game"
 	"cellular-phagocyte/server/internal/gateway"
+	"cellular-phagocyte/server/internal/httpx"
 	"cellular-phagocyte/server/internal/match"
 	"cellular-phagocyte/server/internal/rank"
 	"cellular-phagocyte/server/internal/record"
@@ -105,7 +106,11 @@ func New(cfg config.Config, log *slog.Logger) (*App, error) {
 	matchSvc := match.NewService(cfg.Match, users, mgr, log, st.match)
 	matchH := match.NewHandlers(matchSvc, userH, cfg.Match)
 
-	gw := gateway.New(mgr, log)
+	originPolicy := httpx.OriginPolicy{
+		AllowedOrigins: cfg.Security.AllowedOrigins,
+		AllowLoopback:  cfg.Security.AllowLoopbackOrigins,
+	}
+	gw := gateway.NewWithSecurity(mgr, log, originPolicy, cfg.Security.WSReadLimitBytes)
 
 	mux := http.NewServeMux()
 	userH.Register(mux)
@@ -121,7 +126,7 @@ func New(cfg config.Config, log *slog.Logger) (*App, error) {
 
 	return &App{
 		Cfg:        cfg,
-		Handler:    withCORS(mux),
+		Handler:    withCORS(mux, originPolicy),
 		Users:      users,
 		Match:      matchSvc,
 		Game:       mgr,
@@ -131,12 +136,20 @@ func New(cfg config.Config, log *slog.Logger) (*App, error) {
 	}, nil
 }
 
-// withCORS 允许浏览器客户端跨域调用 API，并直接响应 OPTIONS 预检请求。
-func withCORS(next http.Handler) http.Handler {
+// withCORS 对浏览器 Origin 执行与 WebSocket 相同的来源策略，并响应 OPTIONS 预检。
+func withCORS(next http.Handler, policy httpx.OriginPolicy) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if !policy.AllowsRequest(r) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
