@@ -1,6 +1,6 @@
 // 匹配屏幕：单卡片、明确状态、较少装饰，等待信息优先。
 
-import { Node, Sprite } from 'cc';
+import { Node, Sprite, UITransform } from 'cc';
 import { config } from '../core/config';
 import type { Screen, ScreenCtx } from '../app/context';
 import { logger } from '../core/logger';
@@ -90,12 +90,14 @@ export class MatchScreen implements Screen {
     ring.spriteFrame = ringTexture();
     ring.sizeMode = Sprite.SizeMode.CUSTOM;
     ring.color = theme.primaryBright;
+    root.getComponent(UITransform)!.setContentSize(92, 92);
 
     const cell = uiNode('match-cell', 54, 54);
     const cellSp = cell.addComponent(Sprite);
     cellSp.spriteFrame = circleTexture();
     cellSp.sizeMode = Sprite.SizeMode.CUSTOM;
     cellSp.color = theme.primary;
+    cell.getComponent(UITransform)!.setContentSize(54, 54);
     root.addChild(cell);
 
     const nucleus = uiNode('match-nucleus', 16, 16);
@@ -103,6 +105,7 @@ export class MatchScreen implements Screen {
     nucleusSp.spriteFrame = circleTexture();
     nucleusSp.sizeMode = Sprite.SizeMode.CUSTOM;
     nucleusSp.color = theme.accent;
+    nucleus.getComponent(UITransform)!.setContentSize(16, 16);
     nucleus.setPosition(9, 9, 0);
     root.addChild(nucleus);
     return root;
