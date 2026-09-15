@@ -204,6 +204,10 @@ func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultDat
 	p.conn = conn
 	p.Entered = true
 	p.disconnectDeadline = 0
+	// 输入序号属于单条客户端连接的序号空间。重连会创建新的 WS client，seq 从头开始；
+	// 不能让旧连接的 lastInputSeq 导致新连接的合法 MOVE 被误判为过期输入。
+	p.lastInputSeq = 0
+	p.pendingDir = nil
 	if p.alive() {
 		p.Status = StatusPlaying
 	}
