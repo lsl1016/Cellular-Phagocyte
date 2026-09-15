@@ -1,7 +1,7 @@
-// 程序化生成纹理：白色圆 / 圆角矩形 / 纯色块。
-// 所有实体共享同一张圆纹理，由 Sprite tint 上色，可享受自动合批。
+// 程序化生成纹理：圆 / 圆环 / 圆角矩形 / 纯色块 / 纵向渐变。
+// 全部使用内存纹理，避免引入外部 UI 素材依赖。
 
-import { ImageAsset, SpriteFrame, Texture2D } from 'cc';
+import { Color, ImageAsset, SpriteFrame, Texture2D } from 'cc';
 
 function makeSpriteFrame(
   w: number,
@@ -31,9 +31,7 @@ function makeSpriteFrame(
   tex.image = img;
   const sf = new SpriteFrame();
   sf.texture = tex;
-  // 内存纹理不能参与动态合图（动态图集复制路径 texSubImage2D 不支持
-  // Uint8Array 源，会抛 Overload resolution failed）。
-  // 所有实体本就共享同一张纹理 + 同材质，渲染器仍会自动合批，无性能损失。
+  // 内存纹理不能参与动态合图；共享纹理 + 同材质仍可由渲染器自动合批。
   sf.packable = false;
   return sf;
 }
@@ -52,6 +50,25 @@ export function circleTexture(): SpriteFrame {
     return [255, 255, 255, Math.round(a * 255)];
   });
   return circleCache;
+}
+
+let ringCache: SpriteFrame | null = null;
+
+/** 白色圆环，用于匹配动画与技能按钮装饰。 */
+export function ringTexture(): SpriteFrame {
+  if (ringCache) return ringCache;
+  const size = 64;
+  const c = size / 2;
+  const outer = c - 1.5;
+  const inner = outer - 6;
+  ringCache = makeSpriteFrame(size, size, (x, y) => {
+    const d = Math.hypot(x - c + 0.5, y - c + 0.5);
+    const outerA = Math.max(0, Math.min(1, outer - d + 0.5));
+    const innerA = Math.max(0, Math.min(1, d - inner + 0.5));
+    const a = Math.min(outerA, innerA);
+    return [255, 255, 255, Math.round(a * 255)];
+  });
+  return ringCache;
 }
 
 let roundRectCache: SpriteFrame | null = null;
@@ -78,4 +95,28 @@ export function solidTexture(): SpriteFrame {
   if (solidCache) return solidCache;
   solidCache = makeSpriteFrame(2, 2, () => [255, 255, 255, 255]);
   return solidCache;
+}
+
+const gradientCache = new Map<string, SpriteFrame>();
+
+/** 纵向渐变纹理；top / bottom 可带 alpha。 */
+export function verticalGradientTexture(top: Color, bottom: Color): SpriteFrame {
+  const key = `${top.r},${top.g},${top.b},${top.a}-${bottom.r},${bottom.g},${bottom.b},${bottom.a}`;
+  const cached = gradientCache.get(key);
+  if (cached) return cached;
+
+  const h = 128;
+  const sf = makeSpriteFrame(4, h, (_x, y) => {
+    const t = y / (h - 1);
+    const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
+    // 纹理坐标从下往上写，因此 y=0 使用 bottom。
+    return [
+      mix(bottom.r, top.r),
+      mix(bottom.g, top.g),
+      mix(bottom.b, top.b),
+      mix(bottom.a, top.a),
+    ];
+  });
+  gradientCache.set(key, sf);
+  return sf;
 }
