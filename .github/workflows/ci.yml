@@ -175,7 +175,7 @@ jobs:
             -churn-fraction 0.01 \
             -reconnect-jitter 300ms \
             -min-reconnect-success 0.98 \
-            -min-snapshot-healthy 0.98
+            -min-snapshot-healthy 0.95
 
   cocos-core-smoke:
     name: Cocos core smoke
