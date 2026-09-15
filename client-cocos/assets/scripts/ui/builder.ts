@@ -1,6 +1,6 @@
 // 程序化 UI 构建辅助：统一屏幕、卡片、按钮、统计块与 HUD 控件。
 
-import { Color, Label, Layers, Node, Sprite, UITransform, Widget, view } from 'cc';
+import { Color, Label, Layers, Node, Sprite, SpriteFrame, UITransform, Widget, view } from 'cc';
 import {
   circleTexture,
   ringTexture,
@@ -16,6 +16,37 @@ export function uiNode(name: string, w = 0, h = 0): Node {
   n.layer = Layers.Enum.UI_2D;
   const t = n.addComponent(UITransform);
   if (w > 0 || h > 0) t.setContentSize(Math.max(0, w), Math.max(0, h));
+  return n;
+}
+
+/**
+ * Cocos 在给 Sprite 赋 spriteFrame 时可能按纹理原始尺寸重写 UITransform。
+ * 程序化纹理多为 64x64，如果不在赋值后恢复尺寸，按钮/卡片就会退化成 64x64 小方块。
+ */
+function applySprite(
+  node: Node,
+  sprite: Sprite,
+  frame: SpriteFrame,
+  width: number,
+  height: number,
+  color?: Color,
+): void {
+  sprite.spriteFrame = frame;
+  sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+  node.getComponent(UITransform)!.setContentSize(Math.max(1, width), Math.max(1, height));
+  if (color) sprite.color = color;
+}
+
+function spriteNode(
+  name: string,
+  width: number,
+  height: number,
+  frame: SpriteFrame,
+  color: Color,
+): Node {
+  const n = uiNode(name);
+  const sp = n.addComponent(Sprite);
+  applySprite(n, sp, frame, width, height, color);
   return n;
 }
 
@@ -42,6 +73,8 @@ export function label(text: string, opts: LabelOpts = {}): Node {
   else if (opts.align === 'right') lb.horizontalAlign = Label.HorizontalAlign.RIGHT;
   else lb.horizontalAlign = Label.HorizontalAlign.CENTER;
   lb.verticalAlign = Label.VerticalAlign.CENTER;
+  // Label 组件也可能按字体内容更新尺寸，最后再次固定期望尺寸。
+  n.getComponent(UITransform)!.setContentSize(width, height);
   return n;
 }
 
@@ -58,11 +91,9 @@ function addSpriteLayer(
   color: Color,
   inset = 0,
 ): Node {
-  const n = uiNode(name, Math.max(1, width - inset * 2), Math.max(1, height - inset * 2));
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = roundRectTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = color;
+  const w = Math.max(1, width - inset * 2);
+  const h = Math.max(1, height - inset * 2);
+  const n = spriteNode(name, w, h, roundRectTexture(), color);
   parent.addChild(n);
   return n;
 }
@@ -96,18 +127,10 @@ export interface ButtonOpts {
   variant?: ButtonVariant;
 }
 
-export function button(
-  text: string,
-  onClick: () => void,
-  opts: ButtonOpts = {},
-): Node {
+export function button(text: string, onClick: () => void, opts: ButtonOpts = {}): Node {
   const w = opts.width ?? 220;
   const h = opts.height ?? 62;
   const variant: ButtonVariant = opts.variant ?? (opts.secondary ? 'secondary' : 'primary');
-  const n = uiNode('button', w, h);
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = roundRectTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
 
   let bg = theme.primary;
   let fg = theme.primaryText;
@@ -121,16 +144,15 @@ export function button(
     bg = withAlpha(theme.cardBorder, 150);
     fg = theme.subtle;
   }
-  sp.color = bg;
 
+  const n = spriteNode('button', w, h, roundRectTexture(), bg);
   // 保持 label 为第一个 child，兼容现有 setLabel(btn.children[0], ...) 调用。
-  const txt = label(text, {
+  n.addChild(label(text, {
     width: w - 20,
     height: h - 8,
     fontSize: opts.fontSize ?? theme.fontSize,
     color: fg,
-  });
-  n.addChild(txt);
+  }));
   bindPress(n, onClick, opts.disabled);
   return n;
 }
@@ -144,23 +166,18 @@ export interface CircleButtonOpts {
 }
 
 /** 圆形技能按钮。 */
-export function circleButton(
-  text: string,
-  onClick: () => void,
-  opts: CircleButtonOpts = {},
-): Node {
+export function circleButton(text: string, onClick: () => void, opts: CircleButtonOpts = {}): Node {
   const size = opts.size ?? 88;
-  const n = uiNode('circle-button', size, size);
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = circleTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = opts.disabled ? withAlpha(theme.cardBorder, 160) : (opts.color ?? theme.primary);
+  const bg = opts.disabled ? withAlpha(theme.cardBorder, 160) : (opts.color ?? theme.primary);
+  const n = spriteNode('circle-button', size, size, circleTexture(), bg);
 
-  const ring = uiNode('circle-ring', size + 10, size + 10);
-  const ringSp = ring.addComponent(Sprite);
-  ringSp.spriteFrame = ringTexture();
-  ringSp.sizeMode = Sprite.SizeMode.CUSTOM;
-  ringSp.color = opts.ringColor ?? withAlpha(theme.primaryBright, 165);
+  const ring = spriteNode(
+    'circle-ring',
+    size + 10,
+    size + 10,
+    ringTexture(),
+    opts.ringColor ?? withAlpha(theme.primaryBright, 165),
+  );
   n.addChild(ring);
 
   n.addChild(label(text, {
@@ -260,11 +277,7 @@ export function pill(text: string, opts: PillOpts = {}): Node {
   const fontSize = opts.fontSize ?? theme.smallSize + 1;
   const w = opts.width ?? Math.max(76, text.length * (fontSize * 0.82) + 30);
   const h = opts.height ?? 34;
-  const n = uiNode('pill', w, h);
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = roundRectTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = opts.color ?? withAlpha(theme.secondary, 230);
+  const n = spriteNode('pill', w, h, roundRectTexture(), opts.color ?? withAlpha(theme.secondary, 230));
   n.addChild(label(text, {
     width: w - 16,
     height: h - 4,
@@ -282,38 +295,30 @@ export interface StatCardOpts {
 }
 
 /** 两行统计卡片，值节点命名为 stat-value，便于异步刷新。 */
-export function statCard(
-  title: string,
-  value: string,
-  opts: StatCardOpts = {},
-): Node {
+export function statCard(title: string, value: string, opts: StatCardOpts = {}): Node {
+  const width = opts.width ?? 150;
+  const height = opts.height ?? 86;
   const titleEl = label(title, {
-    width: (opts.width ?? 150) - 28,
+    width: width - 28,
     fontSize: theme.smallSize,
     color: theme.muted,
     align: 'left',
   });
   titleEl.name = 'stat-title';
   const valueEl = label(value, {
-    width: (opts.width ?? 150) - 28,
+    width: width - 28,
     fontSize: theme.bigSize - 4,
     color: opts.valueColor ?? theme.text,
     align: 'left',
   });
   valueEl.name = 'stat-value';
-  const n = panel(
-    [titleEl, valueEl],
-    opts.width ?? 150,
-    2,
-    14,
-    { height: opts.height ?? 86, color: theme.cardSoft, shadow: false },
-  );
-  const accent = uiNode('stat-accent', 4, (opts.height ?? 86) - 24);
-  const sp = accent.addComponent(Sprite);
-  sp.spriteFrame = solidTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = opts.accent ?? theme.primaryBright;
-  accent.setPosition(-(opts.width ?? 150) / 2 + 10, 0, 0);
+  const n = panel([titleEl, valueEl], width, 2, 14, {
+    height,
+    color: theme.cardSoft,
+    shadow: false,
+  });
+  const accent = spriteNode('stat-accent', 4, height - 24, solidTexture(), opts.accent ?? theme.primaryBright);
+  accent.setPosition(-width / 2 + 10, 0, 0);
   n.addChild(accent);
   return n;
 }
@@ -331,11 +336,7 @@ export function actionTile(
   onClick: () => void,
   width = 220,
 ): Node {
-  const titleEl = label(title, {
-    width: width - 50,
-    fontSize: theme.fontSize,
-    align: 'left',
-  });
+  const titleEl = label(title, { width: width - 50, fontSize: theme.fontSize, align: 'left' });
   const subEl = label(subtitle, {
     width: width - 50,
     fontSize: theme.smallSize,
@@ -355,28 +356,14 @@ export function actionTile(
 }
 
 export function divider(width: number, color = withAlpha(theme.cardBorder, 180)): Node {
-  const n = uiNode('divider', width, 1);
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = solidTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = color;
-  return n;
+  return spriteNode('divider', width, 1, solidTexture(), color);
 }
 
 export function progressBar(value: number, width = 260, height = 10): Node {
-  const root = uiNode('progress', width, height);
-  const bg = root.addComponent(Sprite);
-  bg.spriteFrame = roundRectTexture();
-  bg.sizeMode = Sprite.SizeMode.CUSTOM;
-  bg.color = theme.secondary;
-
+  const root = spriteNode('progress', width, height, roundRectTexture(), theme.secondary);
   const clamped = Math.max(0, Math.min(1, value));
   const fillWidth = Math.max(height, width * clamped);
-  const fill = uiNode('progress-fill', fillWidth, height);
-  const fillSp = fill.addComponent(Sprite);
-  fillSp.spriteFrame = roundRectTexture();
-  fillSp.sizeMode = Sprite.SizeMode.CUSTOM;
-  fillSp.color = theme.accent;
+  const fill = spriteNode('progress-fill', fillWidth, height, roundRectTexture(), theme.accent);
   fill.setPosition(-width / 2 + fillWidth / 2, 0, 0);
   root.addChild(fill);
   return root;
@@ -384,11 +371,8 @@ export function progressBar(value: number, width = 260, height = 10): Node {
 
 /** 全屏渐变背景 + 低透明细胞光斑。 */
 export function fullBackground(parent: Node, color?: Color): Node {
-  const n = uiNode('bg', 2, 2);
-  const sp = n.addComponent(Sprite);
-  sp.spriteFrame = color ? solidTexture() : verticalGradientTexture(theme.bgTop, theme.bgBottom);
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = color ?? new Color(255, 255, 255, 255);
+  const frame = color ? solidTexture() : verticalGradientTexture(theme.bgTop, theme.bgBottom);
+  const n = spriteNode('bg', 2, 2, frame, color ?? new Color(255, 255, 255, 255));
   const wg = n.addComponent(Widget);
   wg.isAlignTop = true;
   wg.isAlignBottom = true;
@@ -411,11 +395,7 @@ export function fullBackground(parent: Node, color?: Color): Node {
 }
 
 function addAmbientOrb(parent: Node, size: number, x: number, y: number, color: Color): void {
-  const orb = uiNode('ambient-orb', size, size);
-  const sp = orb.addComponent(Sprite);
-  sp.spriteFrame = circleTexture();
-  sp.sizeMode = Sprite.SizeMode.CUSTOM;
-  sp.color = color;
+  const orb = spriteNode('ambient-orb', size, size, circleTexture(), color);
   orb.setPosition(x, y, 0);
   parent.addChild(orb);
 }
