@@ -1,7 +1,7 @@
 // 程序化生成纹理：圆 / 圆环 / 圆角矩形 / 纯色块 / 纵向渐变。
-// 全部使用内存纹理，避免引入外部 UI 素材依赖。
+// 全部使用 Texture2D 直接上传 RGBA 像素，兼容 Web 预览与 JSB / Simulator。
 
-import { Color, ImageAsset, SpriteFrame, Texture2D } from 'cc';
+import { Color, SpriteFrame, Texture2D } from 'cc';
 
 function makeSpriteFrame(
   w: number,
@@ -19,16 +19,19 @@ function makeSpriteFrame(
       data[i + 3] = a;
     }
   }
-  const img = new ImageAsset();
-  img.reset({
-    _data: data,
+
+  // 不经 ImageAsset.reset({_data: Uint8Array})：该路径依赖平台图像实现，
+  // Web 预览可用，但 JSB / Cocos Simulator 上可能无法创建原生 ImageAsset，
+  // 从而导致启动阶段 UI 纹理全部不可见。
+  // Texture2D.reset + uploadData 是 Cocos 3.8 官方提供的原始像素上传路径。
+  const tex = new Texture2D();
+  tex.reset({
     width: w,
     height: h,
     format: Texture2D.PixelFormat.RGBA8888,
-    _compressed: false,
   });
-  const tex = new Texture2D();
-  tex.image = img;
+  tex.uploadData(data);
+
   const sf = new SpriteFrame();
   sf.texture = tex;
   // 内存纹理不能参与动态合图；共享纹理 + 同材质仍可由渲染器自动合批。
