@@ -12,6 +12,7 @@ import (
 	"cellular-phagocyte/server/internal/app"
 	"cellular-phagocyte/server/internal/config"
 	"cellular-phagocyte/server/internal/logx"
+	"cellular-phagocyte/server/internal/runtimeobs"
 )
 
 const (
@@ -65,7 +66,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := newHTTPServer(cfg.HTTPAddr, a.Handler)
+	var handler http.Handler = a.Handler
+	if envBool("ENABLE_RUNTIME_METRICS", false) {
+		handler = runtimeobs.Wrap(handler, a.Game)
+		log.Info("runtime_metrics_enabled", "path", "/debug/runtime")
+	}
+
+	srv := newHTTPServer(cfg.HTTPAddr, handler)
 	log.Info("server_start", "addr", cfg.HTTPAddr, "wsPath", cfg.WSPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("server_stopped", "err", err)
