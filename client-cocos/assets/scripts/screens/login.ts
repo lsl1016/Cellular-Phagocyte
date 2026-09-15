@@ -1,6 +1,6 @@
 // 登录屏幕：单主卡片，保留游戏品牌感但避免双栏过度设计。
 
-import { Node, Sprite } from 'cc';
+import { Node, Sprite, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
 import { logger } from '../core/logger';
 import { storage, StorageKeys } from '../core/storage';
@@ -65,12 +65,14 @@ export class LoginScreen implements Screen {
     ring.spriteFrame = ringTexture();
     ring.sizeMode = Sprite.SizeMode.CUSTOM;
     ring.color = withAlpha(theme.primaryBright, 170);
+    root.getComponent(UITransform)!.setContentSize(124, 124);
 
     const cell = uiNode('login-cell', 92, 92);
     const cellSp = cell.addComponent(Sprite);
     cellSp.spriteFrame = circleTexture();
     cellSp.sizeMode = Sprite.SizeMode.CUSTOM;
     cellSp.color = theme.primary;
+    cell.getComponent(UITransform)!.setContentSize(92, 92);
     root.addChild(cell);
 
     const nucleus = uiNode('login-nucleus', 28, 28);
@@ -78,6 +80,7 @@ export class LoginScreen implements Screen {
     nucleusSp.spriteFrame = circleTexture();
     nucleusSp.sizeMode = Sprite.SizeMode.CUSTOM;
     nucleusSp.color = theme.accent;
+    nucleus.getComponent(UITransform)!.setContentSize(28, 28);
     nucleus.setPosition(14, 14, 0);
     root.addChild(nucleus);
     return root;
