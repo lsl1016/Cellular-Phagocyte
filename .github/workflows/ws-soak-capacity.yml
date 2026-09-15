@@ -82,6 +82,10 @@ jobs:
           GAME_COUNTDOWN_SECONDS: '0'
           GAME_BOTS: '0'
           GAME_INIT_MASS: '20'
+          # Capacity baseline deliberately disables food. With equal player mass this prevents
+          # gameplay elimination from being misclassified as transport/reconnect failure.
+          GAME_INITIAL_FOOD_COUNT: '0'
+          GAME_MAX_FOOD_COUNT: '0'
           GAME_AOI_ENABLED: 'true'
           GAME_AOI_FULL_INTERVAL_SECONDS: '5'
           MATCH_MAX_WAIT_SECONDS: '12'

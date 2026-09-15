@@ -51,6 +51,8 @@ func main() {
 	cfg.Game.CountdownSeconds = envInt("GAME_COUNTDOWN_SECONDS", cfg.Game.CountdownSeconds)
 	cfg.Game.BotFillCount = envInt("GAME_BOTS", cfg.Game.BotFillCount)
 	cfg.Game.PlayerInitialMass = float64(envInt("GAME_INIT_MASS", int(cfg.Game.PlayerInitialMass)))
+	cfg.Game.InitialFoodCount = envInt("GAME_INITIAL_FOOD_COUNT", cfg.Game.InitialFoodCount)
+	cfg.Game.MaxFoodCount = envInt("GAME_MAX_FOOD_COUNT", cfg.Game.MaxFoodCount)
 	cfg.Game.AOIEnabled = envBool("GAME_AOI_ENABLED", cfg.Game.AOIEnabled)
 	cfg.Game.BaseViewRadius = envFloat64("GAME_AOI_BASE_RADIUS", cfg.Game.BaseViewRadius)
 	cfg.Game.ViewRadiusFactor = envFloat64("GAME_AOI_RADIUS_FACTOR", cfg.Game.ViewRadiusFactor)

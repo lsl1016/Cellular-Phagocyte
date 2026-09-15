@@ -54,6 +54,9 @@ type serverRuntimeSnapshot struct {
 		RunningRooms    int `json:"runningRooms"`
 		Players         int `json:"players"`
 		HumanPlayers    int `json:"humanPlayers"`
+		AliveHumans     int `json:"aliveHumans"`
+		DeadHumans      int `json:"deadHumans"`
+		ExitedHumans    int `json:"exitedHumans"`
 		ConnectedHumans int `json:"connectedHumans"`
 		Balls           int `json:"balls"`
 		Foods           int `json:"foods"`
@@ -146,8 +149,8 @@ func runServerMetricsSampler(cfg samplerConfig) {
 		"heap_alloc_bytes", "heap_inuse_bytes", "heap_objects", "stack_inuse_bytes",
 		"sys_bytes", "total_alloc_bytes", "mallocs", "frees", "num_gc",
 		"gc_pause_total_ms", "gc_pause_delta_ms",
-		"rooms", "running_rooms", "players", "human_players", "connected_humans",
-		"balls", "foods", "ejected_mass",
+		"rooms", "running_rooms", "players", "human_players", "alive_humans",
+		"dead_humans", "exited_humans", "connected_humans", "balls", "foods", "ejected_mass",
 	}
 	if err := w.Write(header); err != nil {
 		fmt.Fprintf(os.Stderr, "[metrics] write CSV header failed: %v\n", err)
@@ -217,6 +220,9 @@ func runServerMetricsSampler(cfg samplerConfig) {
 			strconv.Itoa(current.Game.RunningRooms),
 			strconv.Itoa(current.Game.Players),
 			strconv.Itoa(current.Game.HumanPlayers),
+			strconv.Itoa(current.Game.AliveHumans),
+			strconv.Itoa(current.Game.DeadHumans),
+			strconv.Itoa(current.Game.ExitedHumans),
 			strconv.Itoa(current.Game.ConnectedHumans),
 			strconv.Itoa(current.Game.Balls),
 			strconv.Itoa(current.Game.Foods),

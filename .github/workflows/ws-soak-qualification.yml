@@ -59,6 +59,9 @@ jobs:
           GAME_COUNTDOWN_SECONDS: '0'
           GAME_BOTS: '0'
           GAME_INIT_MASS: '20'
+          # Capacity qualification isolates transport/runtime capacity from gameplay elimination.
+          GAME_INITIAL_FOOD_COUNT: '0'
+          GAME_MAX_FOOD_COUNT: '0'
           GAME_AOI_ENABLED: 'true'
           GAME_AOI_FULL_INTERVAL_SECONDS: '5'
           MATCH_MAX_WAIT_SECONDS: '12'
@@ -145,7 +148,7 @@ jobs:
           with open(path, newline='') as f:
               rows = list(csv.DictReader(f))
           good = [r for r in rows if not r.get('sample_error')]
-          loaded = [r for r in good if int(float(r.get('connected_humans') or 0)) > 0]
+          loaded = [r for r in good if int(float(r.get('human_players') or 0)) > 0]
           print(f'samples={len(rows)} good={len(good)} loaded={len(loaded)}')
           def vals(key):
               out=[]
@@ -156,10 +159,10 @@ jobs:
           def pct(v,p):
               if not v: return 0.0
               s=sorted(v); i=max(0,min(len(s)-1, math.ceil(len(s)*p)-1)); return s[i]
-          for key in ['process_cpu_percent','rss_bytes','goroutines','heap_alloc_bytes','heap_inuse_bytes','gc_pause_delta_ms','open_fds','connected_humans','rooms','running_rooms']:
+          for key in ['process_cpu_percent','rss_bytes','goroutines','heap_alloc_bytes','heap_inuse_bytes','gc_pause_delta_ms','open_fds','human_players','alive_humans','dead_humans','exited_humans','connected_humans','balls','foods','rooms','running_rooms']:
               v=vals(key)
               if v:
-                  print(f'{key}: mean={statistics.fmean(v):.3f} p95={pct(v,0.95):.3f} p99={pct(v,0.99):.3f} max={max(v):.3f}')
+                  print(f'{key}: mean={statistics.fmean(v):.3f} p95={pct(v,0.95):.3f} p99={pct(v,0.99):.3f} max={max(v):.3f} end={v[-1]:.3f}')
           PY
 
       - name: Upload qualification artifacts

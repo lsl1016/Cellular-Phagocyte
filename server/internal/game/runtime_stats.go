@@ -8,6 +8,9 @@ type RuntimeStats struct {
 	RunningRooms    int `json:"runningRooms"`
 	Players         int `json:"players"`
 	HumanPlayers    int `json:"humanPlayers"`
+	AliveHumans     int `json:"aliveHumans"`
+	DeadHumans      int `json:"deadHumans"`
+	ExitedHumans    int `json:"exitedHumans"`
 	ConnectedHumans int `json:"connectedHumans"`
 	Balls           int `json:"balls"`
 	Foods           int `json:"foods"`
@@ -40,6 +43,15 @@ func (m *Manager) RuntimeStats() RuntimeStats {
 				continue
 			}
 			stats.HumanPlayers++
+			if player.alive() {
+				stats.AliveHumans++
+			}
+			switch player.Status {
+			case StatusDead:
+				stats.DeadHumans++
+			case StatusExited:
+				stats.ExitedHumans++
+			}
 			if player.conn != nil {
 				stats.ConnectedHumans++
 			}
