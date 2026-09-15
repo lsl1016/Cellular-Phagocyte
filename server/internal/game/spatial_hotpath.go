@@ -35,14 +35,20 @@ func (r *Room) eatFoodSpatialLocked() {
 					if !CanEatFood(b.Radius, foodRadius, Distance(b.X, b.Y, f.X, f.Y)) {
 						continue
 					}
+					eventX, eventY := f.X, f.Y
 					b.Mass += f.Mass
 					b.Radius = Radius(b.Mass, r.cfg.RadiusFactor)
 					delete(r.foods, f.ID)
 					p.EatFoodCount++
 					ateAny = true
-					r.addEvent("FOOD_EATEN", map[string]any{
+					r.addRoutedEvent("FOOD_EATEN", map[string]any{
 						"userId": p.UserID, "ballId": b.BallID, "foodId": f.ID,
 						"gainMass": f.Mass, "newMass": b.Mass,
+					}, snapshotEventRoute{
+						ParticipantUserIDs: []string{p.UserID},
+						PlayerIDs:          []string{p.UserID},
+						FoodIDs:            []string{f.ID},
+						HasPosition: true, X: eventX, Y: eventY, Radius: foodRadius,
 					})
 				}
 				if !ateAny {
@@ -90,12 +96,19 @@ func (r *Room) eatEjectedSpatialLocked(now int64) {
 					if !CanEatFood(b.Radius, em.Radius, Distance(b.X, b.Y, em.X, em.Y)) {
 						continue
 					}
+					eventX, eventY, eventRadius := em.X, em.Y, em.Radius
+					ownerID := em.OwnerID
 					b.Mass += em.Mass * r.cfg.EjectGainRatio
 					b.Radius = Radius(b.Mass, r.cfg.RadiusFactor)
 					delete(r.ejected, em.ID)
 					ateAny = true
-					r.addEvent("EJECTED_MASS_EATEN", map[string]any{
+					r.addRoutedEvent("EJECTED_MASS_EATEN", map[string]any{
 						"userId": p.UserID, "ballId": b.BallID, "ejectId": em.ID, "gainMass": em.Mass,
+					}, snapshotEventRoute{
+						ParticipantUserIDs: []string{p.UserID, ownerID},
+						PlayerIDs:          []string{p.UserID, ownerID},
+						EjectedIDs:         []string{em.ID},
+						HasPosition: true, X: eventX, Y: eventY, Radius: eventRadius,
 					})
 				}
 				if !ateAny {

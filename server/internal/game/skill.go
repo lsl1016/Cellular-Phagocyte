@@ -68,9 +68,13 @@ func (r *Room) Split(userID string, dir float64) {
 	p.Balls = append(p.Balls, nb)
 	p.nextSplitTime = now + r.cfg.SplitCooldownMs
 
-	r.addEvent("PLAYER_SPLIT", map[string]any{
+	r.addRoutedEvent("PLAYER_SPLIT", map[string]any{
 		"userId": p.UserID, "sourceBallId": src.BallID, "newBallId": nb.BallID,
 		"direction": dir, "newMass": newMass,
+	}, snapshotEventRoute{
+		ParticipantUserIDs: []string{p.UserID},
+		PlayerIDs:          []string{p.UserID},
+		HasPosition: true, X: nb.X, Y: nb.Y, Radius: nb.Radius,
 	})
 }
 
@@ -129,9 +133,14 @@ func (r *Room) Eject(userID string, dir float64) {
 	p.nextEjectTime = now + r.cfg.EjectIntervalMs
 	p.ejectInWindow++
 
-	r.addEvent("PLAYER_EJECT", map[string]any{
+	r.addRoutedEvent("PLAYER_EJECT", map[string]any{
 		"userId": p.UserID, "sourceBallId": src.BallID, "ejectId": em.ID,
 		"direction": dir, "ejectMass": emMass,
+	}, snapshotEventRoute{
+		ParticipantUserIDs: []string{p.UserID},
+		PlayerIDs:          []string{p.UserID},
+		EjectedIDs:         []string{em.ID},
+		HasPosition: true, X: em.X, Y: em.Y, Radius: em.Radius,
 	})
 }
 
