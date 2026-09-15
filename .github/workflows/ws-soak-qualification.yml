@@ -1,0 +1,177 @@
+name: WebSocket Soak Qualification
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  soak-qualification:
+    name: ${{ matrix.clients }} clients / 300s soak qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        clients: [100, 300, 500]
+    defaults:
+      run:
+        working-directory: server
+    env:
+      CLIENTS: ${{ matrix.clients }}
+      DURATION_SECONDS: '300'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.10'
+          cache-dependency-path: server/go.sum
+
+      - name: Build server and load driver
+        run: |
+          go build -o /tmp/cellular-server ./cmd/server
+          go build -o /tmp/cellular-wsload ./cmd/wsload
+
+      - name: Record runner environment
+        run: |
+          {
+            echo "date=$(date -u +%FT%TZ)"
+            echo "uname=$(uname -a)"
+            echo "nproc=$(nproc)"
+            echo "go=$(go version)"
+            echo '--- memory ---'
+            free -b
+            echo '--- cpu ---'
+            grep -m1 'model name' /proc/cpuinfo || true
+          } | tee /tmp/ws-soak-environment.txt
+
+      - name: Run 5-minute capacity soak
+        env:
+          HTTP_ADDR: 127.0.0.1:18084
+          WS_HOST: 127.0.0.1:18084
+          STORAGE: memory
+          GAME_COUNTDOWN_SECONDS: '0'
+          GAME_BOTS: '0'
+          GAME_INIT_MASS: '20'
+          GAME_AOI_ENABLED: 'true'
+          GAME_AOI_FULL_INTERVAL_SECONDS: '5'
+          MATCH_MAX_WAIT_SECONDS: '12'
+          ALLOW_LOOPBACK_ORIGINS: 'true'
+          ENABLE_RUNTIME_METRICS: 'true'
+        run: |
+          set -euo pipefail
+
+          min_players="$CLIENTS"
+          if [ "$min_players" -gt 100 ]; then
+            min_players=100
+          fi
+          export MATCH_MIN_PLAYERS="$min_players"
+          export GAME_BATTLE_SECONDS=$((DURATION_SECONDS + 60))
+
+          /tmp/cellular-server >/tmp/cellular-soak-server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            status=$?
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              echo '--- server log tail ---'
+              tail -n 500 /tmp/cellular-soak-server.log || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 150); do
+            if curl -fsS http://127.0.0.1:18084/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'server did not become healthy'
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:18084/debug/runtime >/tmp/runtime-initial.json
+
+          /tmp/cellular-wsload \
+            -base-url http://127.0.0.1:18084 \
+            -ws-url ws://127.0.0.1:18084/ws \
+            -clients "$CLIENTS" \
+            -duration "${DURATION_SECONDS}s" \
+            -move-interval 200ms \
+            -latency 0ms \
+            -jitter 0ms \
+            -incoming-drop-rate 0.005 \
+            -outgoing-drop-rate 0.005 \
+            -storm-fraction 0.30 \
+            -storm-count 5 \
+            -churn-fraction 0.005 \
+            -reconnect-jitter 1000ms \
+            -setup-concurrency 150 \
+            -match-timeout 30s \
+            -min-reconnect-success 0.98 \
+            -min-snapshot-healthy 0.98 \
+            -server-metrics-url http://127.0.0.1:18084/debug/runtime \
+            -metrics-interval 1s \
+            -timeseries-csv /tmp/ws-soak-timeseries.csv \
+            | tee /tmp/ws-soak-report.txt
+
+          test -s /tmp/ws-soak-timeseries.csv
+          rows=$(wc -l </tmp/ws-soak-timeseries.csv)
+          if [ "$rows" -lt 250 ]; then
+            echo "runtime CSV has too few rows: $rows"
+            exit 1
+          fi
+
+      - name: Summarize runtime CSV
+        if: always()
+        run: |
+          python3 - <<'PY' | tee /tmp/ws-soak-runtime-summary.txt
+          import csv, math, os, statistics
+          path = '/tmp/ws-soak-timeseries.csv'
+          if not os.path.exists(path):
+              print('runtime csv missing')
+              raise SystemExit(0)
+          with open(path, newline='') as f:
+              rows = list(csv.DictReader(f))
+          good = [r for r in rows if not r.get('sample_error')]
+          loaded = [r for r in good if int(float(r.get('connected_humans') or 0)) > 0]
+          print(f'samples={len(rows)} good={len(good)} loaded={len(loaded)}')
+          def vals(key):
+              out=[]
+              for r in loaded:
+                  try: out.append(float(r[key]))
+                  except (ValueError, KeyError, TypeError): pass
+              return out
+          def pct(v,p):
+              if not v: return 0.0
+              s=sorted(v); i=max(0,min(len(s)-1, math.ceil(len(s)*p)-1)); return s[i]
+          for key in ['process_cpu_percent','rss_bytes','goroutines','heap_alloc_bytes','heap_inuse_bytes','gc_pause_delta_ms','open_fds','connected_humans','rooms','running_rooms']:
+              v=vals(key)
+              if v:
+                  print(f'{key}: mean={statistics.fmean(v):.3f} p95={pct(v,0.95):.3f} p99={pct(v,0.99):.3f} max={max(v):.3f}')
+          PY
+
+      - name: Upload qualification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ws-soak-qualification-${{ matrix.clients }}-clients-300s
+          path: |
+            /tmp/ws-soak-report.txt
+            /tmp/ws-soak-timeseries.csv
+            /tmp/ws-soak-runtime-summary.txt
+            /tmp/ws-soak-environment.txt
+            /tmp/runtime-initial.json
+            /tmp/cellular-soak-server.log
+          if-no-files-found: ignore
