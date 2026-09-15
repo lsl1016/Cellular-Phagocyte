@@ -195,10 +195,15 @@ export class GameScreen implements Screen {
 
   private createOverlay(): Node {
     const overlay = fullSizeNode(this.node!, 'status-overlay');
+    const t = overlay.getComponent(UITransform)!;
+    const width = t.width;
+    const height = t.height;
     const sp = overlay.addComponent(Sprite);
     sp.spriteFrame = solidTexture();
     sp.sizeMode = Sprite.SizeMode.CUSTOM;
     sp.color = theme.overlay;
+    // spriteFrame 赋值后恢复全屏尺寸，避免 2x2 纯色纹理把遮罩缩成一个点。
+    t.setContentSize(width, height);
     return overlay;
   }
 
@@ -208,6 +213,7 @@ export class GameScreen implements Screen {
     sp.spriteFrame = ringTexture();
     sp.sizeMode = Sprite.SizeMode.CUSTOM;
     sp.color = theme.primaryBright;
+    n.getComponent(UITransform)!.setContentSize(58, 58);
     return n;
   }
 
