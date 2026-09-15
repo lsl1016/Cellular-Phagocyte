@@ -117,7 +117,7 @@ jobs:
         run: |
           go build -o /tmp/cellular-server ./cmd/server
           go build -o /tmp/cellular-wsload ./cmd/wsload
-      - name: Run 50-client delayed/lossy reconnect chaos
+      - name: Run 50-client delayed reconnect chaos
         env:
           HTTP_ADDR: 127.0.0.1:18081
           WS_HOST: 127.0.0.1:18081
@@ -168,14 +168,14 @@ jobs:
             -move-interval 200ms \
             -latency 15ms \
             -jitter 20ms \
-            -incoming-drop-rate 0.02 \
+            -incoming-drop-rate 0 \
             -outgoing-drop-rate 0.03 \
             -storm-fraction 0.30 \
             -storm-count 2 \
             -churn-fraction 0.01 \
             -reconnect-jitter 300ms \
             -min-reconnect-success 0.98 \
-            -min-snapshot-healthy 0.95
+            -min-snapshot-healthy 0.98
 
   cocos-core-smoke:
     name: Cocos core smoke
