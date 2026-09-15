@@ -1,4 +1,4 @@
-name: WebSocket Load Chaos
+name: WebSocket Soak Capacity
 
 on:
   workflow_dispatch:
@@ -6,51 +6,51 @@ on:
       clients:
         description: Real WebSocket client count
         required: true
-        default: '100'
+        default: '300'
         type: choice
         options:
-          - '50'
           - '100'
           - '300'
+          - '500'
       duration_seconds:
-        description: Chaos traffic duration in seconds
+        description: Sustained traffic duration in seconds
         required: true
-        default: '20'
+        default: '300'
         type: string
       netem_delay_ms:
-        description: Kernel-level one-way delay on loopback
+        description: Optional kernel-level one-way delay
         required: true
-        default: '80'
+        default: '0'
         type: string
       netem_jitter_ms:
-        description: Kernel-level delay jitter
+        description: Optional kernel-level delay jitter
         required: true
-        default: '30'
+        default: '0'
         type: string
       netem_loss_percent:
-        description: Kernel-level packet loss percentage
+        description: Optional kernel-level packet loss percentage
         required: true
-        default: '2'
+        default: '0'
         type: string
       storm_fraction:
-        description: Fraction of clients dropped together per storm (0-1)
+        description: Fraction of clients dropped together per storm
         required: true
-        default: '0.50'
+        default: '0.30'
         type: string
       storm_count:
-        description: Number of reconnect storms
+        description: Reconnect storms during the run
         required: true
-        default: '2'
+        default: '5'
         type: string
 
 permissions:
   contents: read
 
 jobs:
-  load-chaos:
-    name: ${{ inputs.clients }} clients / netem ${{ inputs.netem_delay_ms }}ms / loss ${{ inputs.netem_loss_percent }}%
+  soak:
+    name: ${{ inputs.clients }} clients / ${{ inputs.duration_seconds }}s soak
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: server
@@ -74,17 +74,21 @@ jobs:
         run: |
           go build -o /tmp/cellular-server ./cmd/server
           go build -o /tmp/cellular-wsload ./cmd/wsload
-      - name: Run kernel-level weak-network load test
+      - name: Run soak capacity test
         env:
-          HTTP_ADDR: 127.0.0.1:18082
-          WS_HOST: 127.0.0.1:18082
+          HTTP_ADDR: 127.0.0.1:18083
+          WS_HOST: 127.0.0.1:18083
           STORAGE: memory
           GAME_COUNTDOWN_SECONDS: '0'
           GAME_BOTS: '0'
           GAME_INIT_MASS: '20'
+          # Capacity baseline deliberately disables food. With equal player mass this prevents
+          # gameplay elimination from being misclassified as transport/reconnect failure.
+          GAME_INITIAL_FOOD_COUNT: '0'
+          GAME_MAX_FOOD_COUNT: '0'
           GAME_AOI_ENABLED: 'true'
           GAME_AOI_FULL_INTERVAL_SECONDS: '5'
-          MATCH_MAX_WAIT_SECONDS: '8'
+          MATCH_MAX_WAIT_SECONDS: '12'
           ALLOW_LOOPBACK_ORIGINS: 'true'
           ENABLE_RUNTIME_METRICS: 'true'
         run: |
@@ -95,9 +99,9 @@ jobs:
             min_players=100
           fi
           export MATCH_MIN_PLAYERS="$min_players"
-          export GAME_BATTLE_SECONDS=$((DURATION_SECONDS + 45))
+          export GAME_BATTLE_SECONDS=$((DURATION_SECONDS + 60))
 
-          /tmp/cellular-server >/tmp/cellular-load-server.log 2>&1 &
+          /tmp/cellular-server >/tmp/cellular-soak-server.log 2>&1 &
           server_pid=$!
           cleanup() {
             status=$?
@@ -106,65 +110,63 @@ jobs:
             wait "$server_pid" 2>/dev/null || true
             if [ "$status" -ne 0 ]; then
               echo '--- server log tail ---'
-              tail -n 500 /tmp/cellular-load-server.log || true
+              tail -n 500 /tmp/cellular-soak-server.log || true
             fi
             exit "$status"
           }
           trap cleanup EXIT
 
-          ready=0
           for _ in $(seq 1 150); do
-            if curl -fsS http://127.0.0.1:18082/healthz >/dev/null; then
-              ready=1
+            if curl -fsS http://127.0.0.1:18083/healthz >/dev/null; then
               break
             fi
             sleep 0.1
           done
-          if [ "$ready" -ne 1 ]; then
-            echo 'server did not become healthy'
-            exit 1
-          fi
+          curl -fsS http://127.0.0.1:18083/healthz >/dev/null
+          curl -fsS http://127.0.0.1:18083/debug/runtime | head -c 1000
+          echo
 
-          if ! command -v tc >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y iproute2
+          if [ "$NETEM_DELAY_MS" != '0' ] || [ "$NETEM_JITTER_MS" != '0' ] || [ "$NETEM_LOSS_PERCENT" != '0' ]; then
+            if ! command -v tc >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y iproute2
+            fi
+            sudo tc qdisc replace dev lo root netem \
+              delay "${NETEM_DELAY_MS}ms" "${NETEM_JITTER_MS}ms" distribution normal \
+              loss "${NETEM_LOSS_PERCENT}%"
+            echo '--- active netem ---'
+            tc qdisc show dev lo
           fi
-
-          sudo tc qdisc replace dev lo root netem \
-            delay "${NETEM_DELAY_MS}ms" "${NETEM_JITTER_MS}ms" distribution normal \
-            loss "${NETEM_LOSS_PERCENT}%"
-          echo '--- active netem ---'
-          tc qdisc show dev lo
 
           /tmp/cellular-wsload \
-            -base-url http://127.0.0.1:18082 \
-            -ws-url ws://127.0.0.1:18082/ws \
+            -base-url http://127.0.0.1:18083 \
+            -ws-url ws://127.0.0.1:18083/ws \
             -clients "$CLIENTS" \
             -duration "${DURATION_SECONDS}s" \
             -move-interval 200ms \
             -latency 0ms \
             -jitter 0ms \
-            -incoming-drop-rate 0.01 \
-            -outgoing-drop-rate 0.01 \
+            -incoming-drop-rate 0.005 \
+            -outgoing-drop-rate 0.005 \
             -storm-fraction "$STORM_FRACTION" \
             -storm-count "$STORM_COUNT" \
-            -churn-fraction 0.01 \
-            -reconnect-jitter 800ms \
-            -setup-concurrency 100 \
-            -match-timeout 20s \
-            -min-reconnect-success 0.95 \
-            -min-snapshot-healthy 0.95 \
-            -server-metrics-url http://127.0.0.1:18082/debug/runtime \
+            -churn-fraction 0.005 \
+            -reconnect-jitter 1000ms \
+            -setup-concurrency 150 \
+            -match-timeout 30s \
+            -min-reconnect-success 0.99 \
+            -min-snapshot-healthy 0.99 \
+            -server-metrics-url http://127.0.0.1:18083/debug/runtime \
             -metrics-interval 1s \
-            -timeseries-csv /tmp/ws-load-chaos-timeseries.csv \
-            | tee /tmp/ws-load-chaos-report.txt
-      - name: Upload load report, runtime CSV and server log
+            -timeseries-csv /tmp/ws-soak-timeseries.csv \
+            | tee /tmp/ws-soak-report.txt
+      - name: Upload soak report, runtime CSV and server log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ws-load-chaos-${{ inputs.clients }}-clients
+          name: ws-soak-${{ inputs.clients }}-clients-${{ inputs.duration_seconds }}s
           path: |
-            /tmp/ws-load-chaos-report.txt
-            /tmp/ws-load-chaos-timeseries.csv
-            /tmp/cellular-load-server.log
+            /tmp/ws-soak-report.txt
+            /tmp/ws-soak-timeseries.csv
+            /tmp/cellular-soak-server.log
           if-no-files-found: ignore

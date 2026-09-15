@@ -12,6 +12,7 @@ import (
 	"cellular-phagocyte/server/internal/app"
 	"cellular-phagocyte/server/internal/config"
 	"cellular-phagocyte/server/internal/logx"
+	"cellular-phagocyte/server/internal/runtimeobs"
 )
 
 const (
@@ -50,6 +51,8 @@ func main() {
 	cfg.Game.CountdownSeconds = envInt("GAME_COUNTDOWN_SECONDS", cfg.Game.CountdownSeconds)
 	cfg.Game.BotFillCount = envInt("GAME_BOTS", cfg.Game.BotFillCount)
 	cfg.Game.PlayerInitialMass = float64(envInt("GAME_INIT_MASS", int(cfg.Game.PlayerInitialMass)))
+	cfg.Game.InitialFoodCount = envInt("GAME_INITIAL_FOOD_COUNT", cfg.Game.InitialFoodCount)
+	cfg.Game.MaxFoodCount = envInt("GAME_MAX_FOOD_COUNT", cfg.Game.MaxFoodCount)
 	cfg.Game.AOIEnabled = envBool("GAME_AOI_ENABLED", cfg.Game.AOIEnabled)
 	cfg.Game.BaseViewRadius = envFloat64("GAME_AOI_BASE_RADIUS", cfg.Game.BaseViewRadius)
 	cfg.Game.ViewRadiusFactor = envFloat64("GAME_AOI_RADIUS_FACTOR", cfg.Game.ViewRadiusFactor)
@@ -65,7 +68,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := newHTTPServer(cfg.HTTPAddr, a.Handler)
+	var handler http.Handler = a.Handler
+	if envBool("ENABLE_RUNTIME_METRICS", false) {
+		handler = runtimeobs.Wrap(handler, a.Game)
+		log.Info("runtime_metrics_enabled", "path", "/debug/runtime")
+	}
+
+	srv := newHTTPServer(cfg.HTTPAddr, handler)
 	log.Info("server_start", "addr", cfg.HTTPAddr, "wsPath", cfg.WSPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("server_stopped", "err", err)
