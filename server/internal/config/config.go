@@ -25,10 +25,11 @@ type GameConfig struct {
 
 	// AOI 视野同步。视野半径 = BaseViewRadius + maxBallRadius * ViewRadiusFactor，
 	// 再受 MaxViewRadius 上限约束；当前玩家自身球体始终同步。
-	AOIEnabled          bool
-	BaseViewRadius      float64
-	ViewRadiusFactor    float64
-	MaxViewRadius       float64
+	AOIEnabled                     bool
+	BaseViewRadius                 float64
+	ViewRadiusFactor               float64
+	MaxViewRadius                  float64
+	AOIFullSnapshotIntervalSeconds int // DELTA 链周期性发送完整校正快照的秒数
 
 	// 分裂相关
 	MinSplitMass         float64 // 可分裂的最小质量
@@ -119,10 +120,11 @@ func Default() Config {
 			BotFillCount:          8,
 			BotInitialMass:        20,
 
-			AOIEnabled:       true,
-			BaseViewRadius:   1200,
-			ViewRadiusFactor: 5,
-			MaxViewRadius:    2500,
+			AOIEnabled:                     true,
+			BaseViewRadius:                 1200,
+			ViewRadiusFactor:               5,
+			MaxViewRadius:                  2500,
+			AOIFullSnapshotIntervalSeconds: 5,
 
 			MinSplitMass:         40,
 			MaxSplitBalls:        8,

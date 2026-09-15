@@ -5,7 +5,7 @@
 import { config } from '../app/config.js';
 import { logger } from '../common/logger.js';
 import { WsClient } from '../network/ws.js';
-import { C2S, S2C } from '../protocol/messages.js';
+import { C2S, S2C, isAOIDeltaData } from '../protocol/messages.js';
 import type {
   CountdownData,
   EnterRoomResultData,
@@ -16,6 +16,7 @@ import type {
   RoomSnapshotData,
   SettlementResultData,
   SkillFailedData,
+  SnapshotPayload,
 } from '../protocol/messages.js';
 import { GameState } from '../state/game-state.js';
 import { Camera, zoomForMass } from './camera.js';
@@ -62,6 +63,7 @@ export class BattleManager {
   private intentionalClose = false;
   private reconnecting = false;
   private reconnectResolver: ((ok: boolean) => void) | null = null;
+  private fullSyncRequested = false;
 
   private baseScale = 3.2;
 
@@ -88,6 +90,7 @@ export class BattleManager {
     this.intentionalClose = false;
     this.reconnecting = false;
     this.reconnectResolver = null;
+    this.fullSyncRequested = false;
 
     this.cb.onStatus?.('正在进入房间...');
     await this.openConnection('enter');
@@ -104,6 +107,7 @@ export class BattleManager {
     this.input?.stop();
     this.ws.close();
     window.removeEventListener('resize', this.onResize);
+    this.fullSyncRequested = false;
   }
 
   /** 供 UI 按钮调用：按当前指针方向分裂。 */
@@ -224,6 +228,7 @@ export class BattleManager {
 
     this.ws.on(S2C.ROOM_RECOVER_SNAPSHOT, (data) => {
       this.state.applySnapshot(data as RoomSnapshotData);
+      this.fullSyncRequested = false;
     });
 
     this.ws.on(S2C.START_COUNTDOWN, (data) => {
@@ -239,7 +244,12 @@ export class BattleManager {
     });
 
     this.ws.on(S2C.ROOM_SNAPSHOT, (data) => {
-      this.state.applySnapshot(data as RoomSnapshotData);
+      const d = data as SnapshotPayload;
+      if (!this.state.applySnapshot(d)) {
+        this.requestFullSync();
+        return;
+      }
+      if (!isAOIDeltaData(d)) this.fullSyncRequested = false;
     });
 
     this.ws.on(S2C.RANK_UPDATE, (data) => {
@@ -260,6 +270,13 @@ export class BattleManager {
     this.ws.on(S2C.SETTLEMENT_RESULT, (data) => {
       this.cb.onSettlement?.(data as SettlementResultData);
     });
+  }
+
+  private requestFullSync(): void {
+    if (this.fullSyncRequested || !this.ws.connected) return;
+    this.fullSyncRequested = true;
+    logger.warn('aoi_delta_base_mismatch', { snapshotSeq: this.state.snapshotSeq });
+    this.ws.send(C2S.FULL_SYNC, { roomId: this.session.roomId });
   }
 
   private startInput(): void {

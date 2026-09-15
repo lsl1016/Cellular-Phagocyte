@@ -147,6 +147,7 @@ func (g *Gateway) serveReconnect(conn *wsConn, first protocol.Envelope) {
 	if recoverSnap != nil {
 		conn.Send(protocol.Envelope{
 			Type:       protocol.TypeRoomRecover,
+			Seq:        recoverSnap.SnapshotSeq,
 			ServerTime: time.Now().UnixMilli(),
 			Data:       protocol.MustMarshal(recoverSnap),
 		})
@@ -203,6 +204,8 @@ func (g *Gateway) readLoop(conn *wsConn, room *game.Room, userID string) {
 			if err := json.Unmarshal(env.Data, &in); err == nil {
 				room.Eject(userID, in.Direction)
 			}
+		case protocol.TypeFullSync:
+			room.RequestFullSync(userID)
 		case protocol.TypePing:
 			conn.Send(protocol.Envelope{Type: protocol.TypePong, ServerTime: time.Now().UnixMilli()})
 		}
