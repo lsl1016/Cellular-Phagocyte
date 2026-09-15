@@ -131,6 +131,7 @@ jobs:
           MATCH_MIN_PLAYERS: '50'
           MATCH_MAX_WAIT_SECONDS: '5'
           ALLOW_LOOPBACK_ORIGINS: 'true'
+          ENABLE_RUNTIME_METRICS: 'true'
         run: |
           set -euo pipefail
           /tmp/cellular-server >/tmp/cellular-wsload-server.log 2>&1 &
@@ -159,6 +160,7 @@ jobs:
             echo 'server did not become healthy'
             exit 1
           fi
+          curl -fsS http://127.0.0.1:18081/debug/runtime >/tmp/runtime-initial.json
 
           /tmp/cellular-wsload \
             -base-url http://127.0.0.1:18081 \
@@ -175,7 +177,31 @@ jobs:
             -churn-fraction 0.01 \
             -reconnect-jitter 300ms \
             -min-reconnect-success 0.98 \
-            -min-snapshot-healthy 0.98
+            -min-snapshot-healthy 0.98 \
+            -server-metrics-url http://127.0.0.1:18081/debug/runtime \
+            -metrics-interval 1s \
+            -timeseries-csv /tmp/ws-ci-timeseries.csv
+
+          test -s /tmp/ws-ci-timeseries.csv
+          rows=$(wc -l </tmp/ws-ci-timeseries.csv)
+          if [ "$rows" -lt 3 ]; then
+            echo "runtime CSV has too few rows: $rows"
+            cat /tmp/ws-ci-timeseries.csv || true
+            exit 1
+          fi
+          echo '--- runtime CSV head ---'
+          head -n 5 /tmp/ws-ci-timeseries.csv
+
+      - name: Upload chaos runtime CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ws-chaos-smoke-runtime
+          path: |
+            /tmp/ws-ci-timeseries.csv
+            /tmp/runtime-initial.json
+            /tmp/cellular-wsload-server.log
+          if-no-files-found: ignore
 
   cocos-core-smoke:
     name: Cocos core smoke
