@@ -9,15 +9,56 @@ import (
 
 const rankTopN = 10
 
-// broadcastSnapshotLocked 构建并发送一份完整的 ROOM_SNAPSHOT，并清空累积的事件缓冲。
+// broadcastSnapshotLocked 构建 ROOM_SNAPSHOT，并清空累积的事件缓冲。
+// AOI 开启时每个玩家获得一份当前视野的完整状态；关闭时保留旧的全房间广播路径，
+// 方便灰度和性能对照。两种路径都走 latest-only snapshot lane。
 func (r *Room) broadcastSnapshotLocked() {
 	now := time.Now().UnixMilli()
 	r.snapshotSeq++
+	events := r.pendingEvents
+	r.pendingEvents = nil
 
+	if r.cfg.AOIEnabled {
+		idx := r.buildAOIIndexLocked()
+		scratch := newAOISnapshotScratch(len(r.order), idx.ballCount, len(r.foods), len(r.ejected))
+		for _, id := range r.order {
+			p := r.players[id]
+			if p == nil || p.conn == nil {
+				continue
+			}
+			// data 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
+			data := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, "AOI_FULL", now, events)
+			p.conn.SendSnapshot(protocol.Envelope{
+				Type:       protocol.TypeRoomSnapshot,
+				Seq:        r.snapshotSeq,
+				ServerTime: now,
+				Data:       protocol.MustMarshal(data),
+			})
+		}
+		return
+	}
+
+	data := r.fullSnapshotDataLocked("FULL", now, events)
+	env := protocol.Envelope{
+		Type:       protocol.TypeRoomSnapshot,
+		Seq:        r.snapshotSeq,
+		ServerTime: now,
+		Data:       protocol.MustMarshal(data),
+	}
+	for _, id := range r.order {
+		p := r.players[id]
+		if p != nil && p.conn != nil {
+			p.conn.SendSnapshot(env)
+		}
+	}
+}
+
+// fullSnapshotDataLocked 构建旧版全房间状态，用于关闭 AOI 时的兼容路径。
+func (r *Room) fullSnapshotDataLocked(snapshotType string, now int64, events []protocol.SnapshotEvent) protocol.RoomSnapshotData {
 	players := make([]protocol.SnapshotPlayer, 0, len(r.order))
 	for _, id := range r.order {
 		p := r.players[id]
-		if !p.alive() {
+		if p == nil || !p.alive() {
 			continue
 		}
 		balls := make([]protocol.Ball, 0, len(p.Balls))
@@ -41,28 +82,14 @@ func (r *Room) broadcastSnapshotLocked() {
 		})
 	}
 
-	events := r.pendingEvents
-	r.pendingEvents = nil
-
-	env := protocol.Envelope{
-		Type:       protocol.TypeRoomSnapshot,
-		Seq:        r.snapshotSeq,
-		ServerTime: now,
-		Data: protocol.MustMarshal(protocol.RoomSnapshotData{
-			RoomID: r.id, SnapshotType: "FULL", TickSeq: r.tickSeq,
-			ServerTime: now, Players: players, Foods: foods,
-			Ejected: r.ejectedSnapshotLocked(), Events: events,
-		}),
-	}
-	for _, id := range r.order {
-		p := r.players[id]
-		if p.conn != nil {
-			p.conn.SendSnapshot(env)
-		}
+	return protocol.RoomSnapshotData{
+		RoomID: r.id, SnapshotType: snapshotType, TickSeq: r.tickSeq,
+		ServerTime: now, Players: players, Foods: foods,
+		Ejected: r.ejectedSnapshotLocked(), Events: events,
 	}
 }
 
-// ejectedSnapshotLocked 构建当前吐出物列表。
+// ejectedSnapshotLocked 构建当前全部吐出物列表，仅供非 AOI 全量路径使用。
 func (r *Room) ejectedSnapshotLocked() []protocol.SnapshotEjected {
 	out := make([]protocol.SnapshotEjected, 0, len(r.ejected))
 	for _, em := range r.ejected {
@@ -74,38 +101,16 @@ func (r *Room) ejectedSnapshotLocked() []protocol.SnapshotEjected {
 	return out
 }
 
-// recoverSnapshotLocked 构建用于重连恢复的全量快照（含全部玩家与对象）。
-func (r *Room) recoverSnapshotLocked() protocol.RoomSnapshotData {
-	players := make([]protocol.SnapshotPlayer, 0, len(r.order))
-	for _, id := range r.order {
-		p := r.players[id]
-		if !p.alive() {
-			continue
+// recoverSnapshotLocked 构建重连恢复快照。
+// AOI 开启时恢复当前玩家视野，而不是把全地图状态在重连时泄回客户端。
+func (r *Room) recoverSnapshotLocked(userID string) protocol.RoomSnapshotData {
+	now := time.Now().UnixMilli()
+	if r.cfg.AOIEnabled {
+		if p := r.players[userID]; p != nil {
+			return r.aoiSnapshotForPlayerLocked(p, r.buildAOIIndexLocked(), "AOI_FULL_RECOVER", now, nil)
 		}
-		balls := make([]protocol.Ball, 0, len(p.Balls))
-		for _, b := range p.Balls {
-			balls = append(balls, protocol.Ball{
-				BallID: b.BallID, X: round1(b.X), Y: round1(b.Y),
-				Radius: round1(b.Radius), Mass: round1(b.Mass),
-			})
-		}
-		mass := p.totalMass()
-		players = append(players, protocol.SnapshotPlayer{
-			UserID: p.UserID, Nickname: p.Nickname, Status: p.Status,
-			Score: int64(mass), Mass: round1(mass), Balls: balls,
-		})
 	}
-	foods := make([]protocol.SnapshotFood, 0, len(r.foods))
-	for _, f := range r.foods {
-		foods = append(foods, protocol.SnapshotFood{
-			FoodID: f.ID, X: round1(f.X), Y: round1(f.Y), Mass: f.Mass, Color: f.Color,
-		})
-	}
-	return protocol.RoomSnapshotData{
-		RoomID: r.id, SnapshotType: "FULL_RECOVER", TickSeq: r.tickSeq,
-		ServerTime: time.Now().UnixMilli(), Players: players, Foods: foods,
-		Ejected: r.ejectedSnapshotLocked(), Events: nil,
-	}
+	return r.fullSnapshotDataLocked("FULL_RECOVER", now, nil)
 }
 
 // rankedPlayersLocked 返回所有参与过对局的玩家，按 MaxMass 降序排列。

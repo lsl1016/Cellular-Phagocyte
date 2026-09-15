@@ -50,6 +50,10 @@ func main() {
 	cfg.Game.CountdownSeconds = envInt("GAME_COUNTDOWN_SECONDS", cfg.Game.CountdownSeconds)
 	cfg.Game.BotFillCount = envInt("GAME_BOTS", cfg.Game.BotFillCount)
 	cfg.Game.PlayerInitialMass = float64(envInt("GAME_INIT_MASS", int(cfg.Game.PlayerInitialMass)))
+	cfg.Game.AOIEnabled = envBool("GAME_AOI_ENABLED", cfg.Game.AOIEnabled)
+	cfg.Game.BaseViewRadius = envFloat64("GAME_AOI_BASE_RADIUS", cfg.Game.BaseViewRadius)
+	cfg.Game.ViewRadiusFactor = envFloat64("GAME_AOI_RADIUS_FACTOR", cfg.Game.ViewRadiusFactor)
+	cfg.Game.MaxViewRadius = envFloat64("GAME_AOI_MAX_RADIUS", cfg.Game.MaxViewRadius)
 	cfg.Match.MinStartPlayers = envInt("MATCH_MIN_PLAYERS", cfg.Match.MinStartPlayers)
 	cfg.Match.MaxWaitSeconds = envInt("MATCH_MAX_WAIT_SECONDS", cfg.Match.MaxWaitSeconds)
 
@@ -93,6 +97,15 @@ func envInt(key string, def int) int {
 func envInt64(key string, def int64) int64 {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func envFloat64(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && n >= 0 {
 			return n
 		}
 	}
