@@ -31,6 +31,74 @@ jobs:
       - name: Benchmark smoke
         run: go test ./internal/game -run '^$' -bench BenchmarkRoomTick -benchmem -benchtime=10x
 
+  real-e2e:
+    name: Real process E2E
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.10'
+          cache-dependency-path: server/go.sum
+      - name: Build server and E2E client
+        run: |
+          go build -o /tmp/cellular-server ./cmd/server
+          go build -o /tmp/cellular-e2e ./cmd/e2e
+      - name: Run real HTTP and WebSocket closed loop
+        env:
+          HTTP_ADDR: 127.0.0.1:18080
+          WS_HOST: 127.0.0.1:18080
+          STORAGE: memory
+          GAME_BATTLE_SECONDS: '10'
+          GAME_COUNTDOWN_SECONDS: '0'
+          GAME_BOTS: '0'
+          GAME_INIT_MASS: '100'
+          GAME_AOI_ENABLED: 'true'
+          GAME_AOI_BASE_RADIUS: '0'
+          GAME_AOI_RADIUS_FACTOR: '0'
+          GAME_AOI_MAX_RADIUS: '1'
+          GAME_AOI_FULL_INTERVAL_SECONDS: '30'
+          MATCH_MIN_PLAYERS: '2'
+          MATCH_MAX_WAIT_SECONDS: '2'
+          ALLOW_LOOPBACK_ORIGINS: 'true'
+        run: |
+          set -euo pipefail
+          /tmp/cellular-server >/tmp/cellular-server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            status=$?
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              echo '--- server log ---'
+              cat /tmp/cellular-server.log || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'server did not become healthy'
+            exit 1
+          fi
+
+          /tmp/cellular-e2e \
+            -base-url http://127.0.0.1:18080 \
+            -ws-url ws://127.0.0.1:18080/ws
+
   cocos-core-smoke:
     name: Cocos core smoke
     runs-on: ubuntu-latest
