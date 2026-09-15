@@ -3,8 +3,6 @@ package game
 import (
 	"math"
 	"time"
-
-	"cellular-phagocyte/server/internal/protocol"
 )
 
 // tickLoop 以配置的 Tick 频率驱动房间，直到对局结束。
@@ -157,11 +155,18 @@ func (r *Room) eatEjectedLocked(now int64) {
 					continue // 保护期内原主不可吃回
 				}
 				if CanEatFood(b.Radius, em.Radius, Distance(b.X, b.Y, em.X, em.Y)) {
+					eventX, eventY, eventRadius := em.X, em.Y, em.Radius
+					ownerID := em.OwnerID
 					b.Mass += em.Mass * r.cfg.EjectGainRatio
 					b.Radius = Radius(b.Mass, r.cfg.RadiusFactor)
 					delete(r.ejected, eid)
-					r.addEvent("EJECTED_MASS_EATEN", map[string]any{
+					r.addRoutedEvent("EJECTED_MASS_EATEN", map[string]any{
 						"userId": p.UserID, "ballId": b.BallID, "ejectId": eid, "gainMass": em.Mass,
+					}, snapshotEventRoute{
+						ParticipantUserIDs: []string{p.UserID, ownerID},
+						PlayerIDs:          []string{p.UserID, ownerID},
+						EjectedIDs:         []string{eid},
+						HasPosition: true, X: eventX, Y: eventY, Radius: eventRadius,
 					})
 				}
 			}
@@ -195,7 +200,11 @@ func (r *Room) mergeBallsLocked(now int64) {
 					bigger.Mass += smaller.Mass
 					bigger.Radius = Radius(bigger.Mass, r.cfg.RadiusFactor)
 					p.Balls = removeBall(p.Balls, smaller)
-					r.addEvent("PLAYER_MERGE", map[string]any{"userId": p.UserID, "ballId": bigger.BallID})
+					r.addRoutedEvent("PLAYER_MERGE", map[string]any{"userId": p.UserID, "ballId": bigger.BallID}, snapshotEventRoute{
+						ParticipantUserIDs: []string{p.UserID},
+						PlayerIDs:          []string{p.UserID},
+						HasPosition: true, X: bigger.X, Y: bigger.Y, Radius: bigger.Radius,
+					})
 					merged = true
 					break
 				}
@@ -226,7 +235,10 @@ func (r *Room) checkReconnectTimeoutLocked(now int64) {
 			p.Balls = nil
 			p.Status = StatusExited
 			p.disconnectDeadline = 0
-			r.addEvent("PLAYER_DEAD", map[string]any{"userId": p.UserID, "reason": "RECONNECT_TIMEOUT"})
+			r.addRoutedEvent("PLAYER_DEAD", map[string]any{"userId": p.UserID, "reason": "RECONNECT_TIMEOUT"}, snapshotEventRoute{
+				ParticipantUserIDs: []string{p.UserID},
+				PlayerIDs:          []string{p.UserID},
+			})
 		}
 	}
 }
@@ -242,13 +254,19 @@ func (r *Room) eatFoodLocked() {
 		for _, b := range p.Balls {
 			for fid, f := range r.foods {
 				if CanEatFood(b.Radius, foodRadius, Distance(b.X, b.Y, f.X, f.Y)) {
+					eventX, eventY := f.X, f.Y
 					b.Mass += f.Mass
 					b.Radius = Radius(b.Mass, r.cfg.RadiusFactor)
 					delete(r.foods, fid)
 					p.EatFoodCount++
-					r.addEvent("FOOD_EATEN", map[string]any{
+					r.addRoutedEvent("FOOD_EATEN", map[string]any{
 						"userId": p.UserID, "ballId": b.BallID, "foodId": fid,
 						"gainMass": f.Mass, "newMass": b.Mass,
+					}, snapshotEventRoute{
+						ParticipantUserIDs: []string{p.UserID},
+						PlayerIDs:          []string{p.UserID},
+						FoodIDs:            []string{fid},
+						HasPosition: true, X: eventX, Y: eventY, Radius: foodRadius,
 					})
 				}
 			}
@@ -303,20 +321,26 @@ func (r *Room) eatPlayersLocked() {
 // eatPlayerBallLocked 只移除被吞噬的单个分身；仅当最后一个球被吞噬时才判定玩家死亡。
 // 返回 true 表示本次吞噬淘汰了目标玩家。
 func (r *Room) eatPlayerBallLocked(victim *Player, victimBall *Ball, attackerID string, gain, attackerNewMass float64) bool {
+	eventX, eventY, eventRadius := victimBall.X, victimBall.Y, victimBall.Radius
 	victim.Balls = removeBall(victim.Balls, victimBall)
 	targetDead := len(victim.Balls) == 0
+	route := snapshotEventRoute{
+		ParticipantUserIDs: []string{attackerID, victim.UserID},
+		PlayerIDs:          []string{attackerID, victim.UserID},
+		HasPosition: true, X: eventX, Y: eventY, Radius: eventRadius,
+	}
 
-	r.addEvent("PLAYER_EATEN", map[string]any{
+	r.addRoutedEvent("PLAYER_EATEN", map[string]any{
 		"attackerUserId": attackerID, "targetUserId": victim.UserID,
 		"targetBallId": victimBall.BallID, "gainMass": gain,
 		"attackerNewMass": attackerNewMass, "targetDead": targetDead,
-	})
+	}, route)
 
 	if !targetDead {
 		return false
 	}
 
-	r.addEvent("PLAYER_DEAD", map[string]any{"userId": victim.UserID})
+	r.addRoutedEvent("PLAYER_DEAD", map[string]any{"userId": victim.UserID}, route)
 	victim.dead = true
 	victim.Status = StatusDead
 	return true
@@ -356,12 +380,6 @@ func (r *Room) allHumansFinishedLocked() bool {
 		}
 	}
 	return played && alive == 0
-}
-
-func (r *Room) addEvent(t string, data map[string]any) {
-	r.pendingEvents = append(r.pendingEvents, protocol.SnapshotEvent{
-		Type: t, Data: protocol.MustMarshal(data),
-	})
 }
 
 func clampF(v, lo, hi float64) float64 {

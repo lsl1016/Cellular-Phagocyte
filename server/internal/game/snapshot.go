@@ -16,7 +16,9 @@ func (r *Room) broadcastSnapshotLocked() {
 	now := time.Now().UnixMilli()
 	r.snapshotSeq++
 	events := r.pendingEvents
+	routes := r.pendingEventRoutes
 	r.pendingEvents = nil
+	r.pendingEventRoutes = nil
 
 	if r.cfg.AOIEnabled {
 		idx := r.buildAOIIndexLocked()
@@ -27,10 +29,14 @@ func (r *Room) broadcastSnapshotLocked() {
 				continue
 			}
 
-			// full 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
-			full := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, protocol.SnapshotAOIFull, now, events)
-			full.SnapshotSeq = r.snapshotSeq
 			state := r.aoiStateLocked(p.UserID)
+			viewerEvents := r.eventsForViewerLocked(p, state, events, routes)
+
+			// full 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
+			// 事件必须在 aoiDeltaFromFullLocked 推进 VisibleSet 之前过滤，
+			// 这样“上一帧可见、本帧已删除”的对象仍能把事件送达观察者。
+			full := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, protocol.SnapshotAOIFull, now, viewerEvents)
+			full.SnapshotSeq = r.snapshotSeq
 
 			var data []byte
 			if r.shouldSendAOIFullLocked(state) {
@@ -53,6 +59,7 @@ func (r *Room) broadcastSnapshotLocked() {
 		return
 	}
 
+	// AOI 关闭时保持旧行为：所有事件仍随全房间 FULL 发送给每个连接。
 	data := r.fullSnapshotDataLocked(protocol.SnapshotFull, now, events)
 	env := protocol.Envelope{
 		Type:       protocol.TypeRoomSnapshot,

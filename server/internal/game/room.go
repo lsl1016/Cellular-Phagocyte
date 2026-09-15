@@ -51,9 +51,10 @@ type Room struct {
 	finished bool
 	nextBall int
 
-	pendingEvents     []protocol.SnapshotEvent
-	endReason         string
-	settlementResults map[string]protocol.SettlementResultData
+	pendingEvents      []protocol.SnapshotEvent
+	pendingEventRoutes []snapshotEventRoute
+	endReason          string
+	settlementResults  map[string]protocol.SettlementResultData
 }
 
 func newRoom(id, matchID, mode string, cfg config.GameConfig, mgr *Manager, log *slog.Logger) *Room {
