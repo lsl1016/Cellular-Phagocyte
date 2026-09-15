@@ -99,6 +99,84 @@ jobs:
             -base-url http://127.0.0.1:18080 \
             -ws-url ws://127.0.0.1:18080/ws
 
+  ws-chaos-smoke:
+    name: WebSocket 50-client chaos smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.10'
+          cache-dependency-path: server/go.sum
+      - name: Build server and load driver
+        run: |
+          go build -o /tmp/cellular-server ./cmd/server
+          go build -o /tmp/cellular-wsload ./cmd/wsload
+      - name: Run 50-client delayed reconnect chaos
+        env:
+          HTTP_ADDR: 127.0.0.1:18081
+          WS_HOST: 127.0.0.1:18081
+          STORAGE: memory
+          GAME_BATTLE_SECONDS: '45'
+          GAME_COUNTDOWN_SECONDS: '0'
+          GAME_BOTS: '0'
+          GAME_INIT_MASS: '20'
+          GAME_AOI_ENABLED: 'true'
+          GAME_AOI_FULL_INTERVAL_SECONDS: '5'
+          MATCH_MIN_PLAYERS: '50'
+          MATCH_MAX_WAIT_SECONDS: '5'
+          ALLOW_LOOPBACK_ORIGINS: 'true'
+        run: |
+          set -euo pipefail
+          /tmp/cellular-server >/tmp/cellular-wsload-server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            status=$?
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              echo '--- load server log ---'
+              tail -n 300 /tmp/cellular-wsload-server.log || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 100); do
+            if curl -fsS http://127.0.0.1:18081/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'server did not become healthy'
+            exit 1
+          fi
+
+          /tmp/cellular-wsload \
+            -base-url http://127.0.0.1:18081 \
+            -ws-url ws://127.0.0.1:18081/ws \
+            -clients 50 \
+            -duration 10s \
+            -move-interval 200ms \
+            -latency 15ms \
+            -jitter 20ms \
+            -incoming-drop-rate 0 \
+            -outgoing-drop-rate 0.03 \
+            -storm-fraction 0.30 \
+            -storm-count 2 \
+            -churn-fraction 0.01 \
+            -reconnect-jitter 300ms \
+            -min-reconnect-success 0.98 \
+            -min-snapshot-healthy 0.98
+
   cocos-core-smoke:
     name: Cocos core smoke
     runs-on: ubuntu-latest
