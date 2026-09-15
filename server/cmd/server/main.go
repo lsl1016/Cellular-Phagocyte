@@ -54,6 +54,7 @@ func main() {
 	cfg.Game.BaseViewRadius = envFloat64("GAME_AOI_BASE_RADIUS", cfg.Game.BaseViewRadius)
 	cfg.Game.ViewRadiusFactor = envFloat64("GAME_AOI_RADIUS_FACTOR", cfg.Game.ViewRadiusFactor)
 	cfg.Game.MaxViewRadius = envFloat64("GAME_AOI_MAX_RADIUS", cfg.Game.MaxViewRadius)
+	cfg.Game.AOIFullSnapshotIntervalSeconds = envInt("GAME_AOI_FULL_INTERVAL_SECONDS", cfg.Game.AOIFullSnapshotIntervalSeconds)
 	cfg.Match.MinStartPlayers = envInt("MATCH_MIN_PLAYERS", cfg.Match.MinStartPlayers)
 	cfg.Match.MaxWaitSeconds = envInt("MATCH_MAX_WAIT_SECONDS", cfg.Match.MaxWaitSeconds)
 

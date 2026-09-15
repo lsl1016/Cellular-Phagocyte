@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,8 +22,8 @@ const (
 //
 // 消息分为两类：
 //   - Send: 可靠控制消息。保持顺序；队列溢出时主动断开慢客户端，由重连机制恢复，绝不静默丢弃。
-//   - SendSnapshot: 高频 ROOM_SNAPSHOT。状态只保留尚未写出的最新一帧，但会把被覆盖快照中的
-//     瞬时 events 合并到新快照，避免 PLAYER_EATEN / PLAYER_MERGE 等事件随旧状态一起丢失。
+//   - SendSnapshot: 高频 ROOM_SNAPSHOT。只保留尚未写出的最新逻辑状态。AOI_DELTA 不直接丢弃中间帧，
+//     而是在覆盖时组合成“原 base -> 最新状态”的累计 DELTA；若待发送的是 FULL，则把 DELTA 折叠进 FULL。
 type wsConn struct {
 	ws *websocket.Conn
 
@@ -66,7 +67,7 @@ func (c *wsConn) Send(env protocol.Envelope) {
 }
 
 // SendSnapshot 非阻塞地更新待发送的最新快照。
-// 旧状态允许被覆盖，但旧快照尚未发送的 transient events 会被顺序合并进新快照。
+// FULL 可以被更新到最新状态；连续 DELTA 会在内存中组合，保证 next.baseSeq 永远指向客户端实际可达的基线。
 func (c *wsConn) SendSnapshot(env protocol.Envelope) {
 	select {
 	case <-c.done:
@@ -76,43 +77,301 @@ func (c *wsConn) SendSnapshot(env protocol.Envelope) {
 
 	c.snapshotMu.Lock()
 	if c.hasSnapshot {
-		env = coalesceSnapshotEvents(c.latestSnapshot, env)
+		env = coalesceSnapshots(c.latestSnapshot, env)
 	}
 	c.latestSnapshot = env
 	c.hasSnapshot = true
 	c.snapshotMu.Unlock()
 
-	// 通知只需要一个：真正写出时会读取当时最新的快照。
+	// 通知只需要一个：真正写出时会读取当时最新的逻辑快照。
 	select {
 	case c.snapshotReady <- struct{}{}:
 	default:
 	}
 }
 
-// coalesceSnapshotEvents 用 next 的最新权威状态替换 previous，但保留 previous 中还未发送的事件。
-// 如果任一负载无法解码，宁可发送 next 的最新状态，也不能因为事件合并失败阻塞 Tick。
-func coalesceSnapshotEvents(previous, next protocol.Envelope) protocol.Envelope {
+type snapshotMeta struct {
+	SnapshotType string `json:"snapshotType"`
+}
+
+// coalesceSnapshots 合并尚未写出的连续 ROOM_SNAPSHOT。
+// 失败时优先保留 next 的最新权威状态；客户端若检测到 baseSeq 不连续会主动请求 FULL_SYNC。
+func coalesceSnapshots(previous, next protocol.Envelope) protocol.Envelope {
 	if previous.Type != protocol.TypeRoomSnapshot || next.Type != protocol.TypeRoomSnapshot {
 		return next
 	}
 
-	var prevData protocol.RoomSnapshotData
-	if err := json.Unmarshal(previous.Data, &prevData); err != nil || len(prevData.Events) == 0 {
+	var prevMeta, nextMeta snapshotMeta
+	if err := json.Unmarshal(previous.Data, &prevMeta); err != nil {
 		return next
 	}
-	var nextData protocol.RoomSnapshotData
-	if err := json.Unmarshal(next.Data, &nextData); err != nil {
+	if err := json.Unmarshal(next.Data, &nextMeta); err != nil {
 		return next
 	}
 
-	merged := make([]protocol.SnapshotEvent, 0, len(prevData.Events)+len(nextData.Events))
-	merged = append(merged, prevData.Events...)
-	merged = append(merged, nextData.Events...)
-	nextData.Events = merged
+	prevDelta := prevMeta.SnapshotType == protocol.SnapshotAOIDelta
+	nextDelta := nextMeta.SnapshotType == protocol.SnapshotAOIDelta
+
+	switch {
+	case !prevDelta && !nextDelta:
+		return mergeFullSnapshotEvents(previous, next)
+	case !prevDelta && nextDelta:
+		return foldDeltaIntoFull(previous, next)
+	case prevDelta && nextDelta:
+		return composeDeltaSnapshots(previous, next)
+	case prevDelta && !nextDelta:
+		return mergeDeltaEventsIntoFull(previous, next)
+	default:
+		return next
+	}
+}
+
+func mergeFullSnapshotEvents(previous, next protocol.Envelope) protocol.Envelope {
+	var prevData, nextData protocol.RoomSnapshotData
+	if err := json.Unmarshal(previous.Data, &prevData); err != nil {
+		return next
+	}
+	if err := json.Unmarshal(next.Data, &nextData); err != nil {
+		return next
+	}
+	if len(prevData.Events) > 0 {
+		nextData.Events = append(append([]protocol.SnapshotEvent{}, prevData.Events...), nextData.Events...)
+	}
 	if data, err := json.Marshal(nextData); err == nil {
 		next.Data = data
 	}
 	return next
+}
+
+// foldDeltaIntoFull 处理“FULL 还没写出，下一帧 DELTA 已到”的情况。
+// 直接在 FULL 上应用 DELTA，最终仍发送一份自包含 FULL，避免客户端依赖从未到达的 base。
+func foldDeltaIntoFull(previous, next protocol.Envelope) protocol.Envelope {
+	var full protocol.RoomSnapshotData
+	var delta protocol.AOIDeltaData
+	if err := json.Unmarshal(previous.Data, &full); err != nil {
+		return next
+	}
+	if err := json.Unmarshal(next.Data, &delta); err != nil {
+		return next
+	}
+	if delta.BaseSeq != full.SnapshotSeq {
+		return next
+	}
+
+	players := make(map[string]protocol.SnapshotPlayer, len(full.Players))
+	for _, p := range full.Players {
+		players[p.UserID] = p
+	}
+	foods := make(map[string]protocol.SnapshotFood, len(full.Foods))
+	for _, f := range full.Foods {
+		foods[f.FoodID] = f
+	}
+	ejected := make(map[string]protocol.SnapshotEjected, len(full.Ejected))
+	for _, e := range full.Ejected {
+		ejected[e.EjectID] = e
+	}
+
+	for _, p := range delta.Entered.Players {
+		players[p.UserID] = p
+	}
+	for _, p := range delta.Updated.Players {
+		players[p.UserID] = p
+	}
+	for _, f := range delta.Entered.Foods {
+		foods[f.FoodID] = f
+	}
+	for _, f := range delta.Updated.Foods {
+		foods[f.FoodID] = f
+	}
+	for _, e := range delta.Entered.Ejected {
+		ejected[e.EjectID] = e
+	}
+	for _, e := range delta.Updated.Ejected {
+		ejected[e.EjectID] = e
+	}
+	removeSnapshotIDs(players, delta.Left.PlayerIDs, delta.Deleted.PlayerIDs)
+	removeSnapshotIDs(foods, delta.Left.FoodIDs, delta.Deleted.FoodIDs)
+	removeSnapshotIDs(ejected, delta.Left.EjectedIDs, delta.Deleted.EjectedIDs)
+
+	full.SnapshotType = protocol.SnapshotAOIFull
+	full.SnapshotSeq = delta.SnapshotSeq
+	full.TickSeq = delta.TickSeq
+	full.ServerTime = delta.ServerTime
+	full.Players = sortedMapValues(players, func(v protocol.SnapshotPlayer) string { return v.UserID })
+	full.Foods = sortedMapValues(foods, func(v protocol.SnapshotFood) string { return v.FoodID })
+	full.Ejected = sortedMapValues(ejected, func(v protocol.SnapshotEjected) string { return v.EjectID })
+	full.Events = append(append([]protocol.SnapshotEvent{}, full.Events...), delta.Events...)
+	if data, err := json.Marshal(full); err == nil {
+		next.Data = data
+	}
+	return next
+}
+
+func mergeDeltaEventsIntoFull(previous, next protocol.Envelope) protocol.Envelope {
+	var delta protocol.AOIDeltaData
+	var full protocol.RoomSnapshotData
+	if err := json.Unmarshal(previous.Data, &delta); err != nil {
+		return next
+	}
+	if err := json.Unmarshal(next.Data, &full); err != nil {
+		return next
+	}
+	if len(delta.Events) > 0 {
+		full.Events = append(append([]protocol.SnapshotEvent{}, delta.Events...), full.Events...)
+	}
+	if data, err := json.Marshal(full); err == nil {
+		next.Data = data
+	}
+	return next
+}
+
+func composeDeltaSnapshots(previous, next protocol.Envelope) protocol.Envelope {
+	var a, b protocol.AOIDeltaData
+	if err := json.Unmarshal(previous.Data, &a); err != nil {
+		return next
+	}
+	if err := json.Unmarshal(next.Data, &b); err != nil {
+		return next
+	}
+	if b.BaseSeq != a.SnapshotSeq {
+		return next
+	}
+
+	out := b
+	out.BaseSeq = a.BaseSeq
+	out.Events = append(append([]protocol.SnapshotEvent{}, a.Events...), b.Events...)
+	out.Entered.Players, out.Updated.Players, out.Left.PlayerIDs, out.Deleted.PlayerIDs = composeObjectDelta(
+		a.Entered.Players, a.Updated.Players, a.Left.PlayerIDs, a.Deleted.PlayerIDs,
+		b.Entered.Players, b.Updated.Players, b.Left.PlayerIDs, b.Deleted.PlayerIDs,
+		func(v protocol.SnapshotPlayer) string { return v.UserID },
+	)
+	out.Entered.Foods, out.Updated.Foods, out.Left.FoodIDs, out.Deleted.FoodIDs = composeObjectDelta(
+		a.Entered.Foods, a.Updated.Foods, a.Left.FoodIDs, a.Deleted.FoodIDs,
+		b.Entered.Foods, b.Updated.Foods, b.Left.FoodIDs, b.Deleted.FoodIDs,
+		func(v protocol.SnapshotFood) string { return v.FoodID },
+	)
+	out.Entered.Ejected, out.Updated.Ejected, out.Left.EjectedIDs, out.Deleted.EjectedIDs = composeObjectDelta(
+		a.Entered.Ejected, a.Updated.Ejected, a.Left.EjectedIDs, a.Deleted.EjectedIDs,
+		b.Entered.Ejected, b.Updated.Ejected, b.Left.EjectedIDs, b.Deleted.EjectedIDs,
+		func(v protocol.SnapshotEjected) string { return v.EjectID },
+	)
+
+	if data, err := json.Marshal(out); err == nil {
+		next.Data = data
+	}
+	return next
+}
+
+type objectOpKind uint8
+
+const (
+	opPresent objectOpKind = iota + 1
+	opLeft
+	opDeleted
+)
+
+type objectOp[T any] struct {
+	basePresent bool
+	kind        objectOpKind
+	value       T
+}
+
+// composeObjectDelta 把 S0->S1 与 S1->S2 两组对象操作合成为 S0->S2。
+// 例如“entered 后又 left”最终是 no-op；“left 后重新 entered”对于 S0 则是 updated。
+func composeObjectDelta[T any](
+	aEntered, aUpdated []T, aLeft, aDeleted []string,
+	bEntered, bUpdated []T, bLeft, bDeleted []string,
+	idOf func(T) string,
+) (entered, updated []T, left, deleted []string) {
+	ops := make(map[string]objectOp[T])
+
+	for _, v := range aEntered {
+		ops[idOf(v)] = objectOp[T]{basePresent: false, kind: opPresent, value: v}
+	}
+	for _, v := range aUpdated {
+		ops[idOf(v)] = objectOp[T]{basePresent: true, kind: opPresent, value: v}
+	}
+	for _, id := range aLeft {
+		ops[id] = objectOp[T]{basePresent: true, kind: opLeft}
+	}
+	for _, id := range aDeleted {
+		ops[id] = objectOp[T]{basePresent: true, kind: opDeleted}
+	}
+
+	applyPresent := func(v T, enteredAtB bool) {
+		id := idOf(v)
+		if op, ok := ops[id]; ok {
+			op.kind = opPresent
+			op.value = v
+			ops[id] = op
+			return
+		}
+		ops[id] = objectOp[T]{basePresent: !enteredAtB, kind: opPresent, value: v}
+	}
+	applyAbsent := func(id string, kind objectOpKind) {
+		if op, ok := ops[id]; ok {
+			if !op.basePresent {
+				delete(ops, id)
+				return
+			}
+			op.kind = kind
+			ops[id] = op
+			return
+		}
+		ops[id] = objectOp[T]{basePresent: true, kind: kind}
+	}
+
+	for _, v := range bEntered {
+		applyPresent(v, true)
+	}
+	for _, v := range bUpdated {
+		applyPresent(v, false)
+	}
+	for _, id := range bLeft {
+		applyAbsent(id, opLeft)
+	}
+	for _, id := range bDeleted {
+		applyAbsent(id, opDeleted)
+	}
+
+	keys := make([]string, 0, len(ops))
+	for id := range ops {
+		keys = append(keys, id)
+	}
+	sort.Strings(keys)
+	for _, id := range keys {
+		op := ops[id]
+		switch op.kind {
+		case opPresent:
+			if op.basePresent {
+				updated = append(updated, op.value)
+			} else {
+				entered = append(entered, op.value)
+			}
+		case opLeft:
+			left = append(left, id)
+		case opDeleted:
+			deleted = append(deleted, id)
+		}
+	}
+	return
+}
+
+func removeSnapshotIDs[T any](items map[string]T, groups ...[]string) {
+	for _, ids := range groups {
+		for _, id := range ids {
+			delete(items, id)
+		}
+	}
+}
+
+func sortedMapValues[T any](items map[string]T, idOf func(T) string) []T {
+	out := make([]T, 0, len(items))
+	for _, v := range items {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return idOf(out[i]) < idOf(out[j]) })
+	return out
 }
 
 func (c *wsConn) takeLatestSnapshot() (protocol.Envelope, bool) {

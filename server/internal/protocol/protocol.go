@@ -13,6 +13,7 @@ const (
 	TypeEject     = "EJECT"
 	TypePing      = "PING"
 	TypeReconnect = "RECONNECT"
+	TypeFullSync  = "FULL_SYNC"
 )
 
 // 服务端 -> 客户端 消息类型。
@@ -35,6 +36,14 @@ const (
 	TypeRoomRecover      = "ROOM_RECOVER_SNAPSHOT"
 )
 
+const (
+	SnapshotFull       = "FULL"
+	SnapshotFullRecover = "FULL_RECOVER"
+	SnapshotAOIFull    = "AOI_FULL"
+	SnapshotAOIRecover = "AOI_FULL_RECOVER"
+	SnapshotAOIDelta   = "AOI_DELTA"
+)
+
 // Envelope 是每条 WebSocket 消息的外层信封。
 type Envelope struct {
 	Type       string          `json:"type"`
@@ -51,6 +60,13 @@ type EnterRoomData struct {
 	EnterToken string `json:"enterToken"`
 }
 
+// ReconnectData 是 RECONNECT 请求负载（客户端 -> 服务端）。
+type ReconnectData struct {
+	RoomID         string `json:"roomId"`
+	UserID         string `json:"userId"`
+	ReconnectToken string `json:"reconnectToken"`
+}
+
 // EnterRoomResultData 是 ENTER_ROOM_RESULT 负载（服务端 -> 客户端）。
 type EnterRoomResultData struct {
 	Success        bool   `json:"success"`
@@ -60,13 +76,6 @@ type EnterRoomResultData struct {
 	ReconnectToken string `json:"reconnectToken,omitempty"`
 	ErrorCode      int    `json:"errorCode,omitempty"`
 	Message        string `json:"message,omitempty"`
-}
-
-// ReconnectData 是 RECONNECT 请求负载（客户端 -> 服务端）。
-type ReconnectData struct {
-	RoomID         string `json:"roomId"`
-	UserID         string `json:"userId"`
-	ReconnectToken string `json:"reconnectToken"`
 }
 
 // ReconnectResultData 是 RECONNECT_RESULT 负载（服务端 -> 客户端）。
@@ -142,15 +151,48 @@ type SnapshotEvent struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
-// RoomSnapshotData 是 ROOM_SNAPSHOT 负载。
+// RoomSnapshotData 是 FULL / AOI_FULL / AOI_FULL_RECOVER 负载。
+// SnapshotSeq 与 Envelope.Seq 一致；恢复快照也携带该值，供后续 AOI_DELTA 校验 baseSeq。
 type RoomSnapshotData struct {
 	RoomID       string            `json:"roomId"`
 	SnapshotType string            `json:"snapshotType"`
+	SnapshotSeq  int64             `json:"snapshotSeq"`
 	TickSeq      int64             `json:"tickSeq"`
 	ServerTime   int64             `json:"serverTime"`
 	Players      []SnapshotPlayer  `json:"players"`
 	Foods        []SnapshotFood    `json:"foods"`
 	Ejected      []SnapshotEjected `json:"ejected"`
+	Events       []SnapshotEvent   `json:"events"`
+}
+
+// SnapshotObjects 是 AOI_DELTA 中携带完整对象内容的集合。
+// 玩家更新始终携带该玩家当前可见球体的完整列表，避免客户端再做分身级 patch。
+type SnapshotObjects struct {
+	Players []SnapshotPlayer  `json:"players,omitempty"`
+	Foods   []SnapshotFood    `json:"foods,omitempty"`
+	Ejected []SnapshotEjected `json:"ejected,omitempty"`
+}
+
+// SnapshotObjectIDs 是离开视野或已经删除的对象 ID 集合。
+type SnapshotObjectIDs struct {
+	PlayerIDs  []string `json:"playerIds,omitempty"`
+	FoodIDs    []string `json:"foodIds,omitempty"`
+	EjectedIDs []string `json:"ejectedIds,omitempty"`
+}
+
+// AOIDeltaData 表示从 BaseSeq 对应客户端状态到 SnapshotSeq 的增量。
+// latest-only WebSocket 通道会在真正写出前合并连续 DELTA，保证客户端不会依赖未发送的中间帧。
+type AOIDeltaData struct {
+	RoomID       string            `json:"roomId"`
+	SnapshotType string            `json:"snapshotType"`
+	SnapshotSeq  int64             `json:"snapshotSeq"`
+	BaseSeq      int64             `json:"baseSeq"`
+	TickSeq      int64             `json:"tickSeq"`
+	ServerTime   int64             `json:"serverTime"`
+	Entered      SnapshotObjects   `json:"entered"`
+	Updated      SnapshotObjects   `json:"updated"`
+	Left         SnapshotObjectIDs `json:"left"`
+	Deleted      SnapshotObjectIDs `json:"deleted"`
 	Events       []SnapshotEvent   `json:"events"`
 }
 

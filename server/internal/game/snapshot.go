@@ -10,8 +10,8 @@ import (
 const rankTopN = 10
 
 // broadcastSnapshotLocked 构建 ROOM_SNAPSHOT，并清空累积的事件缓冲。
-// AOI 开启时每个玩家获得一份当前视野的完整状态；关闭时保留旧的全房间广播路径，
-// 方便灰度和性能对照。两种路径都走 latest-only snapshot lane。
+// AOI 开启时：首帧/周期校正/FULL_SYNC 发送 AOI_FULL，其余帧发送 AOI_DELTA；
+// AOI 关闭时保留旧的全房间 FULL 广播路径。所有高频状态都走 latest-only snapshot lane。
 func (r *Room) broadcastSnapshotLocked() {
 	now := time.Now().UnixMilli()
 	r.snapshotSeq++
@@ -26,19 +26,34 @@ func (r *Room) broadcastSnapshotLocked() {
 			if p == nil || p.conn == nil {
 				continue
 			}
-			// data 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
-			data := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, "AOI_FULL", now, events)
+
+			// full 的 slice 引用 scratch；必须在下一位 viewer reset scratch 前完成 Marshal。
+			full := r.aoiSnapshotForPlayerWithScratchLocked(p, idx, scratch, protocol.SnapshotAOIFull, now, events)
+			full.SnapshotSeq = r.snapshotSeq
+			state := r.aoiStateLocked(p.UserID)
+
+			var data []byte
+			if r.shouldSendAOIFullLocked(state) {
+				data = protocol.MustMarshal(full)
+				r.rememberAOIFullLocked(state, full, true)
+			} else {
+				// aoiDeltaFromFullLocked 会在比较的同时把 visible state 原地推进到当前 snapshotSeq，
+				// 避免再清空/重建一轮 per-client map。
+				delta := r.aoiDeltaFromFullLocked(state, full)
+				data = protocol.MustMarshal(delta)
+			}
+
 			p.conn.SendSnapshot(protocol.Envelope{
 				Type:       protocol.TypeRoomSnapshot,
 				Seq:        r.snapshotSeq,
 				ServerTime: now,
-				Data:       protocol.MustMarshal(data),
+				Data:       data,
 			})
 		}
 		return
 	}
 
-	data := r.fullSnapshotDataLocked("FULL", now, events)
+	data := r.fullSnapshotDataLocked(protocol.SnapshotFull, now, events)
 	env := protocol.Envelope{
 		Type:       protocol.TypeRoomSnapshot,
 		Seq:        r.snapshotSeq,
@@ -83,7 +98,7 @@ func (r *Room) fullSnapshotDataLocked(snapshotType string, now int64, events []p
 	}
 
 	return protocol.RoomSnapshotData{
-		RoomID: r.id, SnapshotType: snapshotType, TickSeq: r.tickSeq,
+		RoomID: r.id, SnapshotType: snapshotType, SnapshotSeq: r.snapshotSeq, TickSeq: r.tickSeq,
 		ServerTime: now, Players: players, Foods: foods,
 		Ejected: r.ejectedSnapshotLocked(), Events: events,
 	}
@@ -102,15 +117,18 @@ func (r *Room) ejectedSnapshotLocked() []protocol.SnapshotEjected {
 }
 
 // recoverSnapshotLocked 构建重连恢复快照。
-// AOI 开启时恢复当前玩家视野，而不是把全地图状态在重连时泄回客户端。
+// AOI 开启时恢复当前玩家视野，并把该 FULL 记为新连接后续 DELTA 的基线。
 func (r *Room) recoverSnapshotLocked(userID string) protocol.RoomSnapshotData {
 	now := time.Now().UnixMilli()
 	if r.cfg.AOIEnabled {
 		if p := r.players[userID]; p != nil {
-			return r.aoiSnapshotForPlayerLocked(p, r.buildAOIIndexLocked(), "AOI_FULL_RECOVER", now, nil)
+			full := r.aoiSnapshotForPlayerLocked(p, r.buildAOIIndexLocked(), protocol.SnapshotAOIRecover, now, nil)
+			full.SnapshotSeq = r.snapshotSeq
+			r.rememberAOIFullLocked(r.aoiStateLocked(userID), full, true)
+			return full
 		}
 	}
-	return r.fullSnapshotDataLocked("FULL_RECOVER", now, nil)
+	return r.fullSnapshotDataLocked(protocol.SnapshotFullRecover, now, nil)
 }
 
 // rankedPlayersLocked 返回所有参与过对局的玩家，按 MaxMass 降序排列。

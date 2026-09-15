@@ -10,6 +10,7 @@ export const C2S = {
   SPLIT: 'SPLIT',
   EJECT: 'EJECT',
   PING: 'PING',
+  FULL_SYNC: 'FULL_SYNC',
 } as const;
 
 // 服务端 -> 客户端
@@ -126,12 +127,45 @@ export interface SnapshotEvent {
 export interface RoomSnapshotData {
   roomId: string;
   snapshotType: string;
+  snapshotSeq: number;
   tickSeq: number;
   serverTime: number;
   players: SnapshotPlayer[];
   foods: SnapshotFood[];
   ejected: SnapshotEjected[];
   events: SnapshotEvent[];
+}
+
+export interface SnapshotObjects {
+  players?: SnapshotPlayer[];
+  foods?: SnapshotFood[];
+  ejected?: SnapshotEjected[];
+}
+
+export interface SnapshotObjectIds {
+  playerIds?: string[];
+  foodIds?: string[];
+  ejectedIds?: string[];
+}
+
+export interface AOIDeltaData {
+  roomId: string;
+  snapshotType: 'AOI_DELTA';
+  snapshotSeq: number;
+  baseSeq: number;
+  tickSeq: number;
+  serverTime: number;
+  entered: SnapshotObjects;
+  updated: SnapshotObjects;
+  left: SnapshotObjectIds;
+  deleted: SnapshotObjectIds;
+  events: SnapshotEvent[];
+}
+
+export type SnapshotPayload = RoomSnapshotData | AOIDeltaData;
+
+export function isAOIDeltaData(data: SnapshotPayload): data is AOIDeltaData {
+  return data.snapshotType === 'AOI_DELTA';
 }
 
 export interface RankEntry {

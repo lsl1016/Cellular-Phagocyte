@@ -6,7 +6,7 @@ import { Node, view } from 'cc';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
 import { WsClient } from '../net/ws';
-import { C2S, S2C } from '../core/protocol/messages';
+import { C2S, S2C, isAOIDeltaData } from '../core/protocol/messages';
 import type {
   CountdownData,
   EnterRoomResultData,
@@ -17,6 +17,7 @@ import type {
   RoomSnapshotData,
   SettlementResultData,
   SkillFailedData,
+  SnapshotPayload,
 } from '../core/protocol/messages';
 import { GameState } from '../core/state/game-state';
 import { SnapshotBuffer } from '../core/state/snapshot-buffer';
@@ -65,6 +66,7 @@ export class BattleManager {
   private intentionalClose = false;
   private reconnecting = false;
   private reconnectResolver: ((ok: boolean) => void) | null = null;
+  private fullSyncRequested = false;
 
   /** 基准缩放：设计宽 1280 下约可见 800 世界单位，与旧 Canvas 版视野一致。 */
   private baseScale = 1.6;
@@ -88,6 +90,7 @@ export class BattleManager {
     this.intentionalClose = false;
     this.reconnecting = false;
     this.reconnectResolver = null;
+    this.fullSyncRequested = false;
 
     this.cb.onStatus?.('正在进入房间...');
     await this.openConnection('enter');
@@ -102,6 +105,7 @@ export class BattleManager {
     this.ws.close();
     this.snapshotBuffer.reset();
     this.entities.reset();
+    this.fullSyncRequested = false;
   }
 
   /** 供 UI 按钮调用：按当前指针方向分裂。 */
@@ -274,8 +278,9 @@ export class BattleManager {
       const d = data as RoomSnapshotData;
       // 断线期间的时间轴不连续，必须从恢复全量快照重新起步。
       this.snapshotBuffer.reset();
-      this.snapshotBuffer.push(d, Date.now());
       this.state.applySnapshot(d);
+      this.fullSyncRequested = false;
+      this.snapshotBuffer.push(d, Date.now());
       this.firstFrame = true;
       this.entities.sync(this.state);
     });
@@ -293,9 +298,16 @@ export class BattleManager {
     });
 
     this.ws.on(S2C.ROOM_SNAPSHOT, (data) => {
-      const d = data as RoomSnapshotData;
-      this.snapshotBuffer.push(d, Date.now());
-      this.state.applySnapshot(d);
+      const d = data as SnapshotPayload;
+      if (!this.state.applySnapshot(d)) {
+        this.requestFullSync();
+        return;
+      }
+
+      // FULL 修复成功后解除请求抑制；DELTA 则继续沿当前连续链工作。
+      if (!isAOIDeltaData(d)) this.fullSyncRequested = false;
+      const renderFrame = isAOIDeltaData(d) ? this.state.materializeSnapshot(d.events) : d;
+      this.snapshotBuffer.push(renderFrame, Date.now());
       this.entities.sync(this.state);
     });
 
@@ -317,6 +329,13 @@ export class BattleManager {
     this.ws.on(S2C.SETTLEMENT_RESULT, (data) => {
       this.cb.onSettlement?.(data as SettlementResultData);
     });
+  }
+
+  private requestFullSync(): void {
+    if (this.fullSyncRequested || !this.ws.connected) return;
+    this.fullSyncRequested = true;
+    logger.warn('aoi_delta_base_mismatch', { snapshotSeq: this.state.snapshotSeq });
+    this.ws.send(C2S.FULL_SYNC, { roomId: this.session.roomId });
   }
 
   private startInput(): void {

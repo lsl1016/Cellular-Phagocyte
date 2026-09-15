@@ -1,16 +1,17 @@
 // GameState：以服务端快照为准的对局状态。仅做存储与查询，不做权威判定。
 
-import type {
-  RankEntry,
-  RoomSnapshotData,
-  RankUpdateData,
-  SelfRank,
-} from '../protocol/messages';
-
-import type {
-  SnapshotEjected,
-  SnapshotFood,
-  SnapshotPlayer,
+import {
+  isAOIDeltaData,
+  type AOIDeltaData,
+  type RankEntry,
+  type RoomSnapshotData,
+  type RankUpdateData,
+  type SelfRank,
+  type SnapshotEjected,
+  type SnapshotEvent,
+  type SnapshotFood,
+  type SnapshotPayload,
+  type SnapshotPlayer,
 } from '../protocol/messages';
 
 export class GameState {
@@ -24,6 +25,7 @@ export class GameState {
   rankTopN: RankEntry[] = [];
   selfRank: SelfRank | null = null;
 
+  snapshotSeq = 0;
   tickSeq = 0;
   lastServerTime = 0;
   /** 对局结束的服务端时间戳（毫秒）；0 表示未开始计时。 */
@@ -37,6 +39,7 @@ export class GameState {
     this.ejected.clear();
     this.rankTopN = [];
     this.selfRank = null;
+    this.snapshotSeq = 0;
     this.tickSeq = 0;
     this.lastServerTime = 0;
     this.battleEndAt = 0;
@@ -47,7 +50,14 @@ export class GameState {
     this.battleEndAt = serverStart + durationSeconds * 1000;
   }
 
-  applySnapshot(d: RoomSnapshotData): void {
+  /**
+   * FULL 直接替换当前可见状态；AOI_DELTA 只有 baseSeq 连续时才应用。
+   * 返回 false 表示客户端必须请求 FULL_SYNC，调用方不能继续把该帧送入渲染时间轴。
+   */
+  applySnapshot(d: SnapshotPayload): boolean {
+    if (isAOIDeltaData(d)) return this.applyDelta(d);
+
+    this.snapshotSeq = d.snapshotSeq;
     this.tickSeq = d.tickSeq;
     this.lastServerTime = d.serverTime;
 
@@ -77,6 +87,45 @@ export class GameState {
     for (const id of this.ejected.keys()) {
       if (!seenEjected.has(id)) this.ejected.delete(id);
     }
+    return true;
+  }
+
+  private applyDelta(d: AOIDeltaData): boolean {
+    if (d.baseSeq !== this.snapshotSeq) return false;
+
+    for (const p of d.entered.players ?? []) this.players.set(p.userId, p);
+    for (const p of d.updated.players ?? []) this.players.set(p.userId, p);
+    for (const f of d.entered.foods ?? []) this.foods.set(f.foodId, f);
+    for (const f of d.updated.foods ?? []) this.foods.set(f.foodId, f);
+    for (const e of d.entered.ejected ?? []) this.ejected.set(e.ejectId, e);
+    for (const e of d.updated.ejected ?? []) this.ejected.set(e.ejectId, e);
+
+    for (const id of d.left.playerIds ?? []) this.players.delete(id);
+    for (const id of d.deleted.playerIds ?? []) this.players.delete(id);
+    for (const id of d.left.foodIds ?? []) this.foods.delete(id);
+    for (const id of d.deleted.foodIds ?? []) this.foods.delete(id);
+    for (const id of d.left.ejectedIds ?? []) this.ejected.delete(id);
+    for (const id of d.deleted.ejectedIds ?? []) this.ejected.delete(id);
+
+    this.snapshotSeq = d.snapshotSeq;
+    this.tickSeq = d.tickSeq;
+    this.lastServerTime = d.serverTime;
+    return true;
+  }
+
+  /** 把应用完 DELTA 后的 Map 状态物化成一帧完整状态，供插值/渲染层继续复用原接口。 */
+  materializeSnapshot(events: SnapshotEvent[] = []): RoomSnapshotData {
+    return {
+      roomId: this.roomId,
+      snapshotType: 'AOI_MATERIALIZED',
+      snapshotSeq: this.snapshotSeq,
+      tickSeq: this.tickSeq,
+      serverTime: this.lastServerTime,
+      players: [...this.players.values()],
+      foods: [...this.foods.values()],
+      ejected: [...this.ejected.values()],
+      events,
+    };
   }
 
   applyRank(d: RankUpdateData): void {

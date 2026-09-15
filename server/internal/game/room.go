@@ -39,6 +39,9 @@ type Room struct {
 	foods   map[string]*Food
 	ejected map[string]*EjectedMass
 
+	// AOI DELTA 的 per-client 可见集合基线；新连接/重连必须重置并从 FULL 开始。
+	aoiStates map[string]*aoiClientState
+
 	tickSeq     int64
 	snapshotSeq int64
 	startTimeMs int64
@@ -65,6 +68,7 @@ func newRoom(id, matchID, mode string, cfg config.GameConfig, mgr *Manager, log 
 		players:           make(map[string]*Player),
 		foods:             make(map[string]*Food),
 		ejected:           make(map[string]*EjectedMass),
+		aoiStates:         make(map[string]*aoiClientState),
 		settlementResults: make(map[string]protocol.SettlementResultData),
 	}
 }
@@ -144,6 +148,8 @@ func (r *Room) AttachConn(userID string, conn Conn) (*protocol.EnterRoomResultDa
 	if p.Status == StatusMatched {
 		p.Status = StatusReady // 已入房，等待 READY
 	}
+	// 新 socket 不能继承旧 socket 的 DELTA base；下一次 snapshot 必须从 FULL 开始。
+	r.resetAOIStateLocked(userID)
 	reconToken := r.mgr.issueReconnect(r.id, userID)
 	return &protocol.EnterRoomResultData{
 		Success:        true,
@@ -201,6 +207,8 @@ func (r *Room) Reconnect(userID string, conn Conn) (*protocol.ReconnectResultDat
 		p.Status = StatusPlaying
 	}
 
+	// 恢复快照是新连接的全量基线，不能沿用断线前的 VisibleSet。
+	r.resetAOIStateLocked(userID)
 	recoverSnap := r.recoverSnapshotLocked(userID)
 	return &protocol.ReconnectResultData{
 		Success: true, RoomID: r.id, Status: "RECONNECTED", Message: "重连成功",
