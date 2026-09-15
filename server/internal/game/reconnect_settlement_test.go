@@ -1,6 +1,7 @@
 package game
 
 import (
+	"math"
 	"testing"
 
 	"cellular-phagocyte/server/internal/protocol"
@@ -26,6 +27,39 @@ func TestReconnectWhileSettlingRequestsRetry(t *testing.T) {
 	}
 	if p.conn != nil {
 		t.Fatal("failed settling reconnect must not bind the new connection")
+	}
+}
+
+func TestReconnectResetsInputSequenceSpace(t *testing.T) {
+	r := testRoom(t)
+	p := addPlayingHuman(r, "u1", 100)
+	p.conn = nil
+	p.Status = StatusDisconnected
+	p.lastInputSeq = 100
+	staleDir := 0.25
+	p.pendingDir = &staleDir
+
+	conn := &recordingConn{}
+	result, snapshot, ok := r.Reconnect("u1", conn)
+	if !ok {
+		t.Fatalf("running reconnect should succeed: %+v", result)
+	}
+	if snapshot == nil {
+		t.Fatal("running reconnect should return a recovery snapshot")
+	}
+	if p.lastInputSeq != 0 {
+		t.Fatalf("lastInputSeq = %d after reconnect, want 0", p.lastInputSeq)
+	}
+	if p.pendingDir != nil {
+		t.Fatalf("pendingDir should be cleared on reconnect, got %v", *p.pendingDir)
+	}
+
+	r.SubmitInput("u1", 1, math.Pi)
+	if p.lastInputSeq != 1 {
+		t.Fatalf("fresh connection seq=1 was rejected; lastInputSeq=%d", p.lastInputSeq)
+	}
+	if p.pendingDir == nil || math.Abs(*p.pendingDir-math.Pi) > 1e-9 {
+		t.Fatalf("fresh reconnect direction was not accepted: pendingDir=%v", p.pendingDir)
 	}
 }
 
