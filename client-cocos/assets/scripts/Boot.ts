@@ -1,6 +1,6 @@
 // 启动组件：挂在 Main 场景 Canvas 上。构建 ScreenRoot、注册屏幕、进入登录。
 
-import { _decorator, Component, sys, Widget } from 'cc';
+import { _decorator, Component, sys, UITransform, view } from 'cc';
 import { registerKV } from './core/storage';
 import { ApiService } from './net/api';
 import { SceneManager } from './app/scene-manager';
@@ -21,7 +21,7 @@ export class Boot extends Component {
   private manager: SceneManager | null = null;
 
   start(): void {
-    // 跨端本地存储：H5 有 localStorage；原生端注入 sys.localStorage
+    // 跨端本地存储：H5 有 localStorage；原生端注入 sys.localStorage。
     const g = globalThis as Record<string, unknown>;
     if (!g.localStorage) {
       registerKV({
@@ -31,11 +31,14 @@ export class Boot extends Component {
       });
     }
 
-    // 全屏 ScreenRoot
-    const screenRoot = uiNode('ScreenRoot');
-    const wg = screenRoot.addComponent(Widget);
-    wg.isAlignTop = wg.isAlignBottom = wg.isAlignLeft = wg.isAlignRight = true;
-    wg.top = wg.bottom = wg.left = wg.right = 0;
+    // ScreenRoot 必须从创建时就拥有真实尺寸；否则子 Screen 的 Widget/HUD 会以 0x0 父节点计算。
+    const visible = view.getVisibleSize();
+    const canvasT = this.node.getComponent(UITransform);
+    const screenRoot = uiNode(
+      'ScreenRoot',
+      canvasT && canvasT.width > 0 ? canvasT.width : visible.width,
+      canvasT && canvasT.height > 0 ? canvasT.height : visible.height,
+    );
     this.node.addChild(screenRoot);
 
     initToast(this.node);

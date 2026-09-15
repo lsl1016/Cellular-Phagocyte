@@ -1,4 +1,4 @@
-// 排行榜屏幕：日榜 / 周榜 / 最高分，统一新版 Surface 与列表层级。
+// 排行榜屏幕：紧凑榜单 + 轻量 tab，保持与 H5 相似的信息密度。
 
 import { Node, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
@@ -14,6 +14,7 @@ import {
   setLabel,
   uiNode,
 } from '../ui/builder';
+import { screenLayer } from '../ui/layout';
 import { theme, withAlpha } from '../ui/theme';
 
 const TYPES: { key: string; name: string }[] = [
@@ -30,34 +31,30 @@ export class RankScreen implements Screen {
   private selfEl: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('rank-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'rank-screen');
     fullBackground(this.node);
 
-    this.tabsEl = uiNode('rank-tabs', 420, 46);
-    this.listEl = uiNode('rank-list', 620, 330);
-    this.selfEl = label('', { width: 620, color: theme.muted });
-
-    const header = row([
-      label('排行榜', { width: 460, fontSize: theme.titleSize, align: 'left' }),
-      pill('TOP PLAYERS', {
-        width: 130,
-        color: withAlpha(theme.primary, 45),
-        textColor: theme.primaryBright,
-      }),
-    ], 18);
+    this.tabsEl = uiNode('rank-tabs', 390, 42);
+    this.listEl = uiNode('rank-list', 560, 320);
+    this.selfEl = label('', { width: 560, color: theme.muted });
 
     const c = panel([
-      header,
+      label('排行榜', { width: 560, fontSize: theme.titleSize, align: 'left' }),
+      label('日榜 / 周榜 / 历史最高分', {
+        width: 560,
+        fontSize: theme.smallSize + 1,
+        color: theme.muted,
+        align: 'left',
+      }),
       this.tabsEl,
       this.listEl,
       this.selfEl,
       button('返回大厅', () => ctx.go('lobby'), {
-        variant: 'ghost',
-        width: 180,
-        height: 50,
+        variant: 'secondary',
+        width: 170,
+        height: 46,
       }),
-    ], 720, 10, 28, { height: 570, color: theme.cardStrong });
+    ], 630, 10, 28, { height: 550, color: theme.cardStrong });
     centerIn(this.node, c);
 
     this.renderTabs(ctx);
@@ -67,89 +64,82 @@ export class RankScreen implements Screen {
   private renderTabs(ctx: ScreenCtx): void {
     if (!this.tabsEl?.isValid) return;
     clearChildren(this.tabsEl);
-    const widths = [124, 124, 140];
-    const gap = 10;
-    const total = widths.reduce((a, b) => a + b, 0) + gap * 2;
-    let x = -total / 2;
-    for (let i = 0; i < TYPES.length; i++) {
-      const t = TYPES[i];
-      const w = widths[i];
-      const b = button(t.name, () => {
-        if (this.current !== t.key) {
-          this.current = t.key;
-          this.renderTabs(ctx);
-          void this.load(ctx);
-        }
-      }, {
-        variant: this.current === t.key ? 'primary' : 'secondary',
-        width: w,
-        height: 42,
-        fontSize: theme.smallSize + 2,
-      });
-      b.setPosition(x + w / 2, 0, 0);
-      this.tabsEl.addChild(b);
-      x += w + gap;
-    }
+    const buttons = TYPES.map((t) => button(t.name, () => {
+      if (this.current === t.key) return;
+      this.current = t.key;
+      this.renderTabs(ctx);
+      void this.load(ctx);
+    }, {
+      variant: this.current === t.key ? 'primary' : 'secondary',
+      width: t.key === 'best_score' ? 126 : 110,
+      height: 38,
+      fontSize: theme.smallSize,
+    }));
+    this.tabsEl.addChild(row(buttons, 10));
   }
 
   private async load(ctx: ScreenCtx): Promise<void> {
     if (!this.listEl?.isValid || !this.selfEl?.isValid) return;
     clearChildren(this.listEl);
-    const loading = label('正在加载榜单...', { width: 620, color: theme.muted });
-    this.listEl.addChild(loading);
+    this.listEl.addChild(label('正在加载榜单...', { width: 560, color: theme.muted }));
     setLabel(this.selfEl, '');
     try {
       const data = await ctx.api.ranks(this.current, 1, 10);
       if (!this.listEl?.isValid) return;
       clearChildren(this.listEl);
       if (data.list.length === 0) {
-        this.listEl.addChild(label('榜单暂无数据', { width: 620, color: theme.muted }));
+        this.listEl.addChild(label('榜单暂无数据', { width: 560, color: theme.muted }));
       } else {
         const height = this.listEl.getComponent(UITransform)!.height;
         let y = height / 2 - 18;
         for (const it of data.list.slice(0, 10)) {
-          const rowNode = this.rankRow(it.rank, it.nickname || it.userId, it.score, it.self);
-          rowNode.setPosition(0, y, 0);
-          this.listEl.addChild(rowNode);
-          y -= 32;
+          const line = this.rankRow(it.rank, it.nickname || it.userId, it.score, it.self);
+          line.setPosition(0, y, 0);
+          this.listEl.addChild(line);
+          y -= 31;
         }
       }
       if (data.selfRank.onRank && data.selfRank.rank !== null) {
-        setLabel(this.selfEl, `我的排名  #${data.selfRank.rank}   ·   ${data.selfRank.score} 分`);
+        setLabel(this.selfEl, `我的排名  #${data.selfRank.rank} · ${data.selfRank.score} 分`);
       } else {
         setLabel(this.selfEl, '我的排名：暂未上榜');
       }
     } catch {
       clearChildren(this.listEl!);
-      this.listEl!.addChild(label('榜单加载失败，请稍后重试', { width: 620, color: theme.danger }));
+      this.listEl!.addChild(label('榜单加载失败，请稍后重试', { width: 560, color: theme.danger }));
     }
   }
 
   private rankRow(rank: number, nickname: string, score: number, self: boolean): Node {
     const rankColor = rank <= 3 ? theme.warning : theme.muted;
-    const bg = self ? withAlpha(theme.primary, 45) : withAlpha(theme.cardSoft, 215);
+    const bg = self ? withAlpha(theme.primary, 38) : withAlpha(theme.cardSoft, 100);
     return panel([
       row([
         label(rank <= 3 ? `TOP ${rank}` : `#${rank}`, {
-          width: 82,
-          fontSize: theme.smallSize + 1,
+          width: 76,
+          fontSize: theme.smallSize,
           color: rankColor,
           align: 'left',
         }),
         label(nickname, {
-          width: 330,
-          fontSize: theme.smallSize + 2,
+          width: 320,
+          fontSize: theme.smallSize + 1,
           color: self ? theme.primaryBright : theme.text,
           align: 'left',
         }),
         label(`${score}`, {
-          width: 130,
-          fontSize: theme.smallSize + 2,
+          width: 110,
+          fontSize: theme.smallSize + 1,
           color: self ? theme.accent : theme.text,
           align: 'right',
         }),
       ], 8),
-    ], 620, 0, 8, { height: 28, color: bg, shadow: false, borderColor: bg });
+    ], 560, 0, 8, {
+      height: 27,
+      color: bg,
+      borderColor: bg,
+      shadow: false,
+    });
   }
 
   unmount(): void {

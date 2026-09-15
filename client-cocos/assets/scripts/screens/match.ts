@@ -1,4 +1,4 @@
-// 匹配屏幕：模式信息、动态匹配环、等待时长和取消操作。
+// 匹配屏幕：单卡片、明确状态、较少装饰，等待信息优先。
 
 import { Node, Sprite } from 'cc';
 import { config } from '../core/config';
@@ -16,6 +16,7 @@ import {
   setLabel,
   uiNode,
 } from '../ui/builder';
+import { screenLayer } from '../ui/layout';
 import { circleTexture, ringTexture } from '../ui/texgen';
 import { theme, withAlpha } from '../ui/theme';
 
@@ -30,48 +31,45 @@ export class MatchScreen implements Screen {
   private spinner: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('match-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'match-screen');
     fullBackground(this.node);
 
+    this.spinner = this.createSpinner();
+    this.timeEl = label('00:00', { width: 160, fontSize: theme.bigSize + 2 });
     this.tipEl = label('正在寻找合适的对手...', {
       width: 340,
       fontSize: theme.smallSize + 2,
       color: theme.muted,
     });
-    this.timeEl = label('00:00', { width: 180, fontSize: theme.bigSize, color: theme.text });
-    this.spinner = this.createSpinner();
-
-    const info = row([
-      pill('CLASSIC', {
-        width: 100,
-        color: withAlpha(theme.primary, 55),
-        textColor: theme.primaryBright,
-      }),
-      pill('自动匹配', {
-        width: 110,
-        color: withAlpha(theme.accent, 32),
-        textColor: theme.accent,
-      }),
-    ], 10);
 
     const c = panel([
-      info,
-      label('匹配中', { width: 360, fontSize: theme.titleSize }),
+      row([
+        pill('CLASSIC', {
+          width: 100,
+          color: withAlpha(theme.primary, 45),
+          textColor: theme.primaryBright,
+        }),
+        pill('自动匹配', {
+          width: 106,
+          color: withAlpha(theme.accent, 28),
+          textColor: theme.accent,
+        }),
+      ], 10),
+      label('匹配中', { width: 340, fontSize: theme.titleSize }),
       this.spinner,
       this.timeEl,
       this.tipEl,
-      label('保持页面开启，匹配成功后会自动进入房间', {
-        width: 360,
+      label('匹配成功后会自动进入房间', {
+        width: 340,
         fontSize: theme.smallSize,
         color: theme.subtle,
       }),
       button('取消匹配', () => void this.cancel(ctx), {
-        variant: 'ghost',
+        variant: 'secondary',
         width: 220,
-        height: 54,
+        height: 50,
       }),
-    ], 500, 10, 30, { height: 500, color: theme.cardStrong });
+    ], 440, 10, 28, { height: 450, color: theme.cardStrong });
     centerIn(this.node, c);
 
     try {
@@ -87,25 +85,25 @@ export class MatchScreen implements Screen {
   }
 
   private createSpinner(): Node {
-    const root = uiNode('match-spinner', 106, 106);
+    const root = uiNode('match-spinner', 92, 92);
     const ring = root.addComponent(Sprite);
     ring.spriteFrame = ringTexture();
     ring.sizeMode = Sprite.SizeMode.CUSTOM;
     ring.color = theme.primaryBright;
 
-    const cell = uiNode('match-cell', 62, 62);
+    const cell = uiNode('match-cell', 54, 54);
     const cellSp = cell.addComponent(Sprite);
     cellSp.spriteFrame = circleTexture();
     cellSp.sizeMode = Sprite.SizeMode.CUSTOM;
-    cellSp.color = withAlpha(theme.primary, 225);
+    cellSp.color = theme.primary;
     root.addChild(cell);
 
-    const nucleus = uiNode('match-nucleus', 18, 18);
+    const nucleus = uiNode('match-nucleus', 16, 16);
     const nucleusSp = nucleus.addComponent(Sprite);
     nucleusSp.spriteFrame = circleTexture();
     nucleusSp.sizeMode = Sprite.SizeMode.CUSTOM;
     nucleusSp.color = theme.accent;
-    nucleus.setPosition(10, 10, 0);
+    nucleus.setPosition(9, 9, 0);
     root.addChild(nucleus);
     return root;
   }
@@ -121,7 +119,6 @@ export class MatchScreen implements Screen {
           ctx.session.match = {
             roomId: st.roomId,
             enterToken: st.enterToken,
-            // 使用客户端配置推导的 wsUrl，避免服务端返回的 host 与实际不一致。
             wsUrl: config.wsUrl,
           };
           logger.info('match_success', { roomId: st.roomId });
@@ -131,8 +128,7 @@ export class MatchScreen implements Screen {
         this.elapsed += 1;
         this.updateElapsed();
         if (this.tipEl?.isValid) {
-          const text = this.elapsed >= 10 ? '仍在搜索，请稍候...' : '正在寻找合适的对手...';
-          setLabel(this.tipEl, text);
+          setLabel(this.tipEl, this.elapsed >= 10 ? '仍在搜索，请稍候...' : '正在寻找合适的对手...');
         }
         this.poll(ctx);
       } catch (e) {
@@ -157,22 +153,16 @@ export class MatchScreen implements Screen {
       try {
         await ctx.api.matchCancel(this.matchId);
       } catch {
-        /* 取消失败忽略 */
+        /* 取消失败忽略。 */
       }
     }
     ctx.go('lobby');
   }
 
   update(dt: number): void {
-    if (this.spinner?.isValid) {
-      const r = this.spinner.eulerAngles;
-      this.spinner.setRotationFromEuler(0, 0, r.z - dt * 150);
-      const nucleus = this.spinner.getChildByName('match-nucleus');
-      if (nucleus?.isValid) {
-        const nr = nucleus.eulerAngles;
-        nucleus.setRotationFromEuler(0, 0, nr.z + dt * 220);
-      }
-    }
+    if (!this.spinner?.isValid) return;
+    const r = this.spinner.eulerAngles;
+    this.spinner.setRotationFromEuler(0, 0, r.z - dt * 150);
   }
 
   unmount(): void {

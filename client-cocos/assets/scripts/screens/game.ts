@@ -1,12 +1,12 @@
-// 对战屏幕：世界渲染 + 轻量 HUD + 圆形技能按钮 + 状态遮罩。
+// 对战屏幕：轻量 HUD，四角贴边，不遮挡核心战场。
 
-import { Color, Layers, Node, Sprite, UITransform, Widget } from 'cc';
+import { Layers, Node, Sprite, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
 import { BattleManager } from '../battle/battle-manager';
 import {
+  centerIn,
   circleButton,
   clearChildren,
-  column,
   label,
   panel,
   pill,
@@ -14,6 +14,7 @@ import {
   setLabel,
   uiNode,
 } from '../ui/builder';
+import { fullSizeNode, pin, screenLayer } from '../ui/layout';
 import { ringTexture, solidTexture } from '../ui/texgen';
 import { theme, withAlpha } from '../ui/theme';
 
@@ -38,149 +39,113 @@ export class GameScreen implements Screen {
       return;
     }
 
-    this.node = uiNode('game-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'game-screen');
 
-    // ---- 世界根节点（相机作用对象） ----
     const worldRoot = new Node('WorldRoot');
     worldRoot.layer = Layers.Enum.UI_2D;
     this.node.addChild(worldRoot);
 
-    // ---- 左上：质量 / 得分 ----
+    // 左上：玩家状态。尺寸与 H5 HUD 接近，避免大卡片遮挡战场。
     this.massEl = label('质量 0', {
-      width: 112,
-      fontSize: theme.smallSize + 4,
-      color: theme.text,
+      width: 82,
+      fontSize: theme.smallSize + 1,
       align: 'left',
     });
     this.scoreEl = label('得分 0', {
-      width: 112,
-      fontSize: theme.smallSize + 4,
+      width: 82,
+      fontSize: theme.smallSize + 1,
       color: theme.accent,
-      align: 'left',
+      align: 'right',
     });
     const statHud = panel([
-      pill(user.nickname, {
-        width: 210,
-        height: 28,
-        fontSize: theme.smallSize,
-        color: withAlpha(theme.primary, 55),
-        textColor: theme.primaryBright,
+      label(user.nickname, {
+        width: 158,
+        fontSize: theme.smallSize + 1,
+        color: theme.primaryBright,
+        align: 'left',
       }),
-      row([this.massEl, this.scoreEl], 8),
-    ], 246, 5, 14, {
-      height: 86,
-      color: withAlpha(theme.card, 230),
+      row([this.massEl, this.scoreEl], 4),
+    ], 184, 2, 10, {
+      height: 66,
+      color: withAlpha(theme.card, 185),
+      borderColor: withAlpha(theme.cardBorder, 100),
       shadow: false,
     });
-    this.anchor(statHud, this.node, 'left-top', 22, 22);
+    pin(statHud, this.node, 'left-top', 14, 14);
 
-    // ---- 顶部中央：倒计时 ----
+    // 顶部中央：只保留倒计时。
     this.timerEl = label('--', {
-      width: 120,
-      fontSize: theme.bigSize,
-      color: theme.text,
+      width: 92,
+      fontSize: theme.bigSize - 4,
     });
-    const timerHud = panel([this.timerEl], 154, 0, 10, {
-      height: 54,
-      color: withAlpha(theme.cardStrong, 232),
+    const timerHud = panel([this.timerEl], 112, 0, 8, {
+      height: 44,
+      color: withAlpha(theme.card, 190),
+      borderColor: withAlpha(theme.primaryBright, 90),
       shadow: false,
-      borderColor: withAlpha(theme.primaryBright, 105),
     });
-    this.anchor(timerHud, this.node, 'center-top', 0, 22);
+    pin(timerHud, this.node, 'center-top', 0, 14);
 
-    // ---- 右上：排行榜 ----
-    this.rankEl = uiNode('rank-list', 226, 216);
+    // 右上：紧凑排行榜，最多展示 5 人。
+    this.rankEl = uiNode('rank-list', 174, 146);
     const rankPanel = panel([
-      row([
-        label('局内排行', { width: 130, fontSize: theme.smallSize + 5, align: 'left' }),
-        pill('TOP', {
-          width: 56,
-          height: 26,
-          fontSize: theme.microSize,
-          color: withAlpha(theme.primary, 48),
-          textColor: theme.primaryBright,
-        }),
-      ], 18),
+      label('局内排行', {
+        width: 174,
+        fontSize: theme.smallSize + 2,
+        color: theme.warning,
+        align: 'left',
+      }),
       this.rankEl,
-    ], 270, 8, 16, {
-      height: 290,
-      color: withAlpha(theme.card, 222),
+    ], 206, 6, 12, {
+      height: 210,
+      color: withAlpha(theme.card, 175),
+      borderColor: withAlpha(theme.cardBorder, 90),
       shadow: false,
     });
-    this.anchor(rankPanel, this.node, 'right-top', 22, 22);
+    pin(rankPanel, this.node, 'right-top', 14, 14);
 
-    // ---- 右下：技能区 ----
+    // 右下：技能键固定贴边，不再堆在屏幕中央。
     const splitBtn = circleButton('分裂', () => this.battle?.requestSplit(), {
-      size: 88,
+      size: 72,
       color: theme.primary,
-      ringColor: withAlpha(theme.primaryBright, 180),
+      ringColor: withAlpha(theme.primaryBright, 170),
+      fontSize: theme.smallSize + 2,
     });
-    const splitGroup = column([
-      splitBtn,
-      pill('SPACE', {
-        width: 72,
-        height: 24,
-        fontSize: theme.microSize,
-        color: withAlpha(theme.secondary, 215),
-        textColor: theme.muted,
-      }),
-    ], 3);
-    this.anchor(splitGroup, this.node, 'right-bottom', 138, 24);
-
     const ejectBtn = circleButton('吐球', () => this.battle?.requestEject(), {
-      size: 78,
+      size: 64,
       color: theme.accent,
-      ringColor: withAlpha(theme.accent, 135),
-      fontSize: theme.smallSize + 4,
+      ringColor: withAlpha(theme.accent, 120),
+      fontSize: theme.smallSize + 1,
     });
-    const ejectGroup = column([
-      ejectBtn,
-      pill('W', {
-        width: 54,
-        height: 24,
-        fontSize: theme.microSize,
-        color: withAlpha(theme.secondary, 215),
-        textColor: theme.muted,
-      }),
-    ], 3);
-    this.anchor(ejectGroup, this.node, 'right-bottom', 42, 28);
+    const skills = row([splitBtn, ejectBtn], 12);
+    pin(skills, this.node, 'right-bottom', 18, 18);
 
-    const hint = pill('鼠标 / 手指控制移动方向', {
-      width: 210,
-      height: 30,
+    const hint = pill('鼠标 / 手指移动 · Space 分裂 · W 吐球', {
+      width: 270,
+      height: 28,
       fontSize: theme.microSize + 1,
-      color: withAlpha(theme.card, 178),
+      color: withAlpha(theme.card, 145),
       textColor: theme.muted,
     });
-    this.anchor(hint, this.node, 'left-bottom', 22, 24);
+    pin(hint, this.node, 'left-bottom', 14, 18);
 
-    // ---- 状态遮罩（入房 / 准备 / 倒计时 / 重连 / 结算） ----
-    this.statusText = label('正在进入房间...', { width: 380, fontSize: theme.fontSize });
+    // 状态遮罩只在入房、倒计时、重连和结算时出现。
+    this.statusText = label('正在进入房间...', { width: 320, fontSize: theme.fontSize });
     this.spinner = this.createStatusSpinner();
     const statusCard = panel([
-      pill('SYSTEM', {
-        width: 92,
-        height: 28,
-        fontSize: theme.microSize,
-        color: withAlpha(theme.primary, 48),
-        textColor: theme.primaryBright,
-      }),
       this.spinner,
       this.statusText,
-      label('连接恢复期间不会丢失已经确认的对局状态', {
-        width: 380,
+      label('请保持连接', {
+        width: 320,
         fontSize: theme.smallSize,
         color: theme.muted,
       }),
-    ], 470, 12, 28, { height: 310, color: theme.cardStrong });
+    ], 380, 10, 24, { height: 230, color: theme.cardStrong });
 
     this.statusOverlay = this.createOverlay();
-    statusCard.setPosition(0, 0, 0);
-    this.statusOverlay.addChild(statusCard);
+    centerIn(this.statusOverlay, statusCard);
     this.node.addChild(this.statusOverlay);
 
-    // ---- 对战编排 ----
     this.battle = new BattleManager(worldRoot, {
       onStatus: (t) => {
         if (this.statusText?.isValid) setLabel(this.statusText, t);
@@ -201,7 +166,7 @@ export class GameScreen implements Screen {
         if (this.statusOverlay?.isValid) this.statusOverlay.active = false;
       },
       onGameEnd: (_reason, msg) => {
-        if (this.statusText?.isValid) setLabel(this.statusText, msg || '对局结束，正在生成结算...');
+        if (this.statusText?.isValid) setLabel(this.statusText, msg || '对局结束，正在结算...');
         if (this.statusOverlay?.isValid) this.statusOverlay.active = true;
       },
       onSettlement: (d) => {
@@ -229,53 +194,21 @@ export class GameScreen implements Screen {
   }
 
   private createOverlay(): Node {
-    const overlay = uiNode('status-overlay', 2, 2);
+    const overlay = fullSizeNode(this.node!, 'status-overlay');
     const sp = overlay.addComponent(Sprite);
     sp.spriteFrame = solidTexture();
     sp.sizeMode = Sprite.SizeMode.CUSTOM;
     sp.color = theme.overlay;
-    const wg = overlay.addComponent(Widget);
-    wg.isAlignTop = wg.isAlignBottom = wg.isAlignLeft = wg.isAlignRight = true;
-    wg.top = wg.bottom = wg.left = wg.right = 0;
     return overlay;
   }
 
   private createStatusSpinner(): Node {
-    const n = uiNode('status-spinner', 72, 72);
+    const n = uiNode('status-spinner', 58, 58);
     const sp = n.addComponent(Sprite);
     sp.spriteFrame = ringTexture();
     sp.sizeMode = Sprite.SizeMode.CUSTOM;
     sp.color = theme.primaryBright;
     return n;
-  }
-
-  /** 把节点锚定到屏幕某个角落（基于 Widget）。 */
-  private anchor(n: Node, parent: Node, pos: string, offset: number, offsetY: number): void {
-    const wg = n.addComponent(Widget);
-    const t = n.getComponent(UITransform)!;
-    if (pos === 'left-top') {
-      wg.isAlignLeft = wg.isAlignTop = true;
-      wg.left = offset + t.width / 2;
-      wg.top = offsetY + t.height / 2;
-    } else if (pos === 'center-top') {
-      wg.isAlignHorizontalCenter = wg.isAlignTop = true;
-      wg.horizontalCenter = 0;
-      wg.top = offsetY + t.height / 2;
-    } else if (pos === 'right-top') {
-      wg.isAlignRight = wg.isAlignTop = true;
-      wg.right = offset + t.width / 2;
-      wg.top = offsetY + t.height / 2;
-    } else if (pos === 'right-bottom') {
-      wg.isAlignRight = wg.isAlignBottom = true;
-      wg.right = offset + t.width / 2;
-      wg.bottom = offsetY + t.height / 2;
-    } else if (pos === 'left-bottom') {
-      wg.isAlignLeft = wg.isAlignBottom = true;
-      wg.left = offset + t.width / 2;
-      wg.bottom = offsetY + t.height / 2;
-    }
-    wg.alignMode = Widget.AlignMode.ONCE;
-    parent.addChild(n);
   }
 
   private startHud(): void {
@@ -289,52 +222,57 @@ export class GameScreen implements Screen {
     if (!b || !this.massEl?.isValid || !this.scoreEl?.isValid || !this.timerEl?.isValid || !this.rankEl?.isValid) {
       return;
     }
+
     const self = b.state.self();
     const mass = Math.round((self?.balls ?? []).reduce((sum, ball) => sum + (ball.mass ?? 0), 0));
     const score = self?.score ?? 0;
     setLabel(this.massEl, `质量 ${mass}`);
     setLabel(this.scoreEl, `得分 ${score}`);
-    setLabel(this.timerEl, `${b.state.remainingSeconds(Date.now())}s`);
+
+    const remaining = Math.max(0, b.state.remainingSeconds(Date.now()));
+    const minutes = Math.floor(remaining / 60).toString().padStart(2, '0');
+    const seconds = (remaining % 60).toString().padStart(2, '0');
+    setLabel(this.timerEl, `${minutes}:${seconds}`);
 
     clearChildren(this.rankEl);
-    let y = this.rankEl.getComponent(UITransform)!.height / 2 - 16;
-    const rows = b.state.rankTopN.slice(0, 6);
+    const t = this.rankEl.getComponent(UITransform)!;
+    let y = t.height / 2 - 14;
+    const rows = b.state.rankTopN.slice(0, 5);
     for (const r of rows) {
       const isMe = r.userId === b.state.selfUserId;
-      const rankText = r.rank <= 3 ? `TOP ${r.rank}` : `#${r.rank}`;
       const item = row([
-        label(rankText, {
-          width: 56,
+        label(r.rank <= 3 ? `${r.rank}` : `#${r.rank}`, {
+          width: 30,
           fontSize: theme.smallSize,
           color: r.rank <= 3 ? theme.warning : theme.muted,
           align: 'left',
         }),
         label(r.nickname, {
-          width: 98,
-          fontSize: theme.smallSize + 1,
+          width: 92,
+          fontSize: theme.smallSize,
           color: isMe ? theme.primaryBright : theme.text,
           align: 'left',
         }),
         label(`${r.score}`, {
-          width: 58,
-          fontSize: theme.smallSize + 1,
+          width: 44,
+          fontSize: theme.smallSize,
           color: isMe ? theme.accent : theme.muted,
           align: 'right',
         }),
       ], 4);
       item.setPosition(0, y, 0);
       this.rankEl.addChild(item);
-      y -= 32;
+      y -= 27;
     }
 
     if (b.state.selfRank && !rows.some((r) => r.userId === b.state.selfUserId)) {
-      const me = label(`我的排名  #${b.state.selfRank.rank}`, {
-        width: 212,
+      const me = label(`我的排名 #${b.state.selfRank.rank}`, {
+        width: 170,
         fontSize: theme.smallSize,
         color: theme.primaryBright,
         align: 'left',
       });
-      me.setPosition(0, -this.rankEl.getComponent(UITransform)!.height / 2 + 16, 0);
+      me.setPosition(0, -t.height / 2 + 12, 0);
       this.rankEl.addChild(me);
     }
   }

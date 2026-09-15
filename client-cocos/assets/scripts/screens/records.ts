@@ -1,4 +1,4 @@
-// 战绩屏幕：统计概览 + 紧凑对局列表 + 分页。
+// 战绩屏幕：轻量统计胶囊 + 对局列表，减少大块卡片。
 
 import { Node, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
@@ -12,10 +12,10 @@ import {
   panel,
   pill,
   row,
-  setStatValue,
-  statCard,
+  setLabel,
   uiNode,
 } from '../ui/builder';
+import { screenLayer } from '../ui/layout';
 import { theme, withAlpha } from '../ui/theme';
 
 const PAGE_SIZE = 6;
@@ -27,51 +27,59 @@ export class RecordsScreen implements Screen {
   private pagerEl: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('records-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'records-screen');
     fullBackground(this.node);
 
-    const totalCard = statCard('总局数', '--', { width: 116, height: 72, accent: theme.primaryBright });
-    const firstCard = statCard('冠军', '--', { width: 116, height: 72, accent: theme.warning, valueColor: theme.warning });
-    const top3Card = statCard('Top 3', '--', { width: 116, height: 72, accent: theme.accent });
-    const scoreCard = statCard('最高分', '--', { width: 116, height: 72, accent: theme.primary });
-    const massCard = statCard('最大质量', '--', { width: 116, height: 72, accent: theme.danger });
+    const total = pill('总局数 --', { width: 116 });
+    const first = pill('冠军 --', {
+      width: 116,
+      color: withAlpha(theme.warning, 32),
+      textColor: theme.warning,
+    });
+    const top3 = pill('Top3 --', {
+      width: 116,
+      color: withAlpha(theme.accent, 26),
+      textColor: theme.accent,
+    });
+    const best = pill('最高分 --', {
+      width: 126,
+      color: withAlpha(theme.primary, 36),
+      textColor: theme.primaryBright,
+    });
+    const mass = pill('最大质量 --', { width: 136 });
 
-    this.listEl = uiNode('records-list', 650, 286);
-    this.pagerEl = uiNode('records-pager', 400, 48);
-
-    const header = row([
-      label('战绩', { width: 500, fontSize: theme.titleSize, align: 'left' }),
-      pill('HISTORY', {
-        width: 110,
-        color: withAlpha(theme.primary, 45),
-        textColor: theme.primaryBright,
-      }),
-    ], 18);
+    this.listEl = uiNode('records-list', 650, 270);
+    this.pagerEl = uiNode('records-pager', 390, 46);
 
     const c = panel([
-      header,
-      row([totalCard, firstCard, top3Card, scoreCard, massCard], 8),
+      label('战绩', { width: 650, fontSize: theme.titleSize, align: 'left' }),
+      label('最近对局与奖励记录', {
+        width: 650,
+        fontSize: theme.smallSize + 1,
+        color: theme.muted,
+        align: 'left',
+      }),
+      row([total, first, top3, best, mass], 8),
       this.listEl,
       this.pagerEl,
       button('返回大厅', () => ctx.go('lobby'), {
-        variant: 'ghost',
-        width: 180,
-        height: 48,
+        variant: 'secondary',
+        width: 170,
+        height: 46,
       }),
-    ], 750, 8, 28, { height: 590, color: theme.cardStrong });
+    ], 720, 10, 28, { height: 550, color: theme.cardStrong });
     centerIn(this.node, c);
 
     try {
       const s = await ctx.api.recordSummary();
       if (!this.node?.isValid) return;
-      setStatValue(totalCard, `${s.totalGames}`);
-      setStatValue(firstCard, `${s.firstPlaceCount}`);
-      setStatValue(top3Card, `${s.top3Count}`);
-      setStatValue(scoreCard, `${s.bestScore}`);
-      setStatValue(massCard, `${s.maxMass}`);
+      setLabel(total.children[0], `总局数 ${s.totalGames}`);
+      setLabel(first.children[0], `冠军 ${s.firstPlaceCount}`);
+      setLabel(top3.children[0], `Top3 ${s.top3Count}`);
+      setLabel(best.children[0], `最高分 ${s.bestScore}`);
+      setLabel(mass.children[0], `最大质量 ${s.maxMass}`);
     } catch {
-      /* 列表仍可独立加载，统计失败不阻塞页面。 */
+      /* 统计失败不阻塞列表。 */
     }
 
     await this.loadPage(ctx);
@@ -92,12 +100,12 @@ export class RecordsScreen implements Screen {
         }));
       } else {
         const height = this.listEl.getComponent(UITransform)!.height;
-        let y = height / 2 - 24;
+        let y = height / 2 - 22;
         for (const r of data.list) {
           const line = this.recordRow(r);
           line.setPosition(0, y, 0);
           this.listEl.addChild(line);
-          y -= 46;
+          y -= 42;
         }
       }
       this.renderPager(ctx, data.total);
@@ -109,46 +117,46 @@ export class RecordsScreen implements Screen {
 
   private recordRow(r: RecordEntry): Node {
     const rewardOk = r.status === 'SUCCESS' || r.settlementStatus === 'SUCCESS';
-    const reward = rewardOk ? `+${r.coinReward}金  +${r.expReward}经` : '结算中';
+    const reward = rewardOk ? `+${r.coinReward}金 +${r.expReward}经` : '结算中';
     const time = new Date(r.endTime).toLocaleString();
     const rankColor = r.rank === 1 ? theme.warning : r.rank <= 3 ? theme.accent : theme.muted;
     return panel([
       row([
         label(`#${r.rank}/${r.totalPlayers}`, {
           width: 82,
-          fontSize: theme.smallSize + 1,
+          fontSize: theme.smallSize,
           color: rankColor,
           align: 'left',
         }),
         label(r.modeName, {
-          width: 100,
-          fontSize: theme.smallSize + 1,
+          width: 98,
+          fontSize: theme.smallSize,
           align: 'left',
         }),
         label(`${r.finalScore} 分`, {
           width: 92,
-          fontSize: theme.smallSize + 1,
+          fontSize: theme.smallSize,
           color: theme.primaryBright,
           align: 'left',
         }),
         label(reward, {
-          width: 130,
+          width: 128,
           fontSize: theme.smallSize,
           color: rewardOk ? theme.accent : theme.muted,
           align: 'left',
         }),
         label(time, {
-          width: 190,
+          width: 188,
           fontSize: theme.microSize + 1,
           color: theme.subtle,
           align: 'right',
         }),
       ], 6),
     ], 650, 0, 8, {
-      height: 40,
-      color: withAlpha(theme.cardSoft, 215),
+      height: 36,
+      color: withAlpha(theme.cardSoft, 120),
+      borderColor: withAlpha(theme.cardBorder, 70),
       shadow: false,
-      borderColor: withAlpha(theme.cardBorder, 150),
     });
   }
 
@@ -156,7 +164,6 @@ export class RecordsScreen implements Screen {
     if (!this.pagerEl?.isValid) return;
     clearChildren(this.pagerEl);
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
     const prev = button('上一页', () => {
       if (this.page > 1) {
         this.page--;
@@ -164,15 +171,15 @@ export class RecordsScreen implements Screen {
       }
     }, {
       variant: 'secondary',
-      width: 118,
-      height: 42,
-      fontSize: theme.smallSize + 1,
+      width: 110,
+      height: 40,
+      fontSize: theme.smallSize,
       disabled: this.page <= 1,
     });
     const current = pill(`${this.page} / ${totalPages}`, {
-      width: 92,
-      height: 34,
-      color: withAlpha(theme.primary, 42),
+      width: 86,
+      height: 32,
+      color: withAlpha(theme.primary, 32),
       textColor: theme.primaryBright,
     });
     const next = button('下一页', () => {
@@ -182,14 +189,12 @@ export class RecordsScreen implements Screen {
       }
     }, {
       variant: 'secondary',
-      width: 118,
-      height: 42,
-      fontSize: theme.smallSize + 1,
+      width: 110,
+      height: 40,
+      fontSize: theme.smallSize,
       disabled: this.page >= totalPages,
     });
-
-    const line = row([prev, current, next], 14);
-    this.pagerEl.addChild(line);
+    this.pagerEl.addChild(row([prev, current, next], 12));
   }
 
   unmount(): void {
