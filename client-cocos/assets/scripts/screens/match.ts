@@ -1,12 +1,24 @@
-// 匹配屏幕：发起匹配并轮询状态，成功后进入对战。
+// 匹配屏幕：单卡片、明确状态、较少装饰，等待信息优先。
 
-import { Node } from 'cc';
+import { Node, Sprite, UITransform } from 'cc';
 import { config } from '../core/config';
 import type { Screen, ScreenCtx } from '../app/context';
 import { logger } from '../core/logger';
 import { ApiError } from '../net/http';
-import { button, card, centerIn, fullBackground, label, setLabel, uiNode } from '../ui/builder';
-import { theme } from '../ui/theme';
+import {
+  button,
+  centerIn,
+  fullBackground,
+  label,
+  panel,
+  pill,
+  row,
+  setLabel,
+  uiNode,
+} from '../ui/builder';
+import { screenLayer } from '../ui/layout';
+import { circleTexture, ringTexture } from '../ui/texgen';
+import { theme, withAlpha } from '../ui/theme';
 
 export class MatchScreen implements Screen {
   private node: Node | null = null;
@@ -15,22 +27,49 @@ export class MatchScreen implements Screen {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private elapsed = 0;
   private tipEl: Node | null = null;
+  private timeEl: Node | null = null;
   private spinner: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('match-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'match-screen');
     fullBackground(this.node);
 
-    this.tipEl = label('正在匹配...', { color: theme.muted });
-    this.spinner = label('◌', { fontSize: 48, color: theme.primary });
+    this.spinner = this.createSpinner();
+    this.timeEl = label('00:00', { width: 160, fontSize: theme.bigSize + 2 });
+    this.tipEl = label('正在寻找合适的对手...', {
+      width: 340,
+      fontSize: theme.smallSize + 2,
+      color: theme.muted,
+    });
 
-    const c = card([
-      label('匹配中', { fontSize: theme.titleSize }),
+    const c = panel([
+      row([
+        pill('CLASSIC', {
+          width: 100,
+          color: withAlpha(theme.primary, 45),
+          textColor: theme.primaryBright,
+        }),
+        pill('自动匹配', {
+          width: 106,
+          color: withAlpha(theme.accent, 28),
+          textColor: theme.accent,
+        }),
+      ], 10),
+      label('匹配中', { width: 340, fontSize: theme.titleSize }),
       this.spinner,
+      this.timeEl,
       this.tipEl,
-      button('取消匹配', () => void this.cancel(ctx), { secondary: true }),
-    ]);
+      label('匹配成功后会自动进入房间', {
+        width: 340,
+        fontSize: theme.smallSize,
+        color: theme.subtle,
+      }),
+      button('取消匹配', () => void this.cancel(ctx), {
+        variant: 'secondary',
+        width: 220,
+        height: 50,
+      }),
+    ], 440, 10, 28, { height: 450, color: theme.cardStrong });
     centerIn(this.node, c);
 
     try {
@@ -45,6 +84,33 @@ export class MatchScreen implements Screen {
     }
   }
 
+  private createSpinner(): Node {
+    const root = uiNode('match-spinner', 92, 92);
+    const ring = root.addComponent(Sprite);
+    ring.spriteFrame = ringTexture();
+    ring.sizeMode = Sprite.SizeMode.CUSTOM;
+    ring.color = theme.primaryBright;
+    root.getComponent(UITransform)!.setContentSize(92, 92);
+
+    const cell = uiNode('match-cell', 54, 54);
+    const cellSp = cell.addComponent(Sprite);
+    cellSp.spriteFrame = circleTexture();
+    cellSp.sizeMode = Sprite.SizeMode.CUSTOM;
+    cellSp.color = theme.primary;
+    cell.getComponent(UITransform)!.setContentSize(54, 54);
+    root.addChild(cell);
+
+    const nucleus = uiNode('match-nucleus', 16, 16);
+    const nucleusSp = nucleus.addComponent(Sprite);
+    nucleusSp.spriteFrame = circleTexture();
+    nucleusSp.sizeMode = Sprite.SizeMode.CUSTOM;
+    nucleusSp.color = theme.accent;
+    nucleus.getComponent(UITransform)!.setContentSize(16, 16);
+    nucleus.setPosition(9, 9, 0);
+    root.addChild(nucleus);
+    return root;
+  }
+
   private poll(ctx: ScreenCtx): void {
     if (!this.polling || !this.matchId) return;
     this.timer = setTimeout(async () => {
@@ -56,7 +122,6 @@ export class MatchScreen implements Screen {
           ctx.session.match = {
             roomId: st.roomId,
             enterToken: st.enterToken,
-            // 使用客户端配置推导的 wsUrl，避免服务端返回的 host 与实际不一致
             wsUrl: config.wsUrl,
           };
           logger.info('match_success', { roomId: st.roomId });
@@ -64,7 +129,10 @@ export class MatchScreen implements Screen {
           return;
         }
         this.elapsed += 1;
-        if (this.tipEl?.isValid) setLabel(this.tipEl, `正在匹配... ${this.elapsed}s`);
+        this.updateElapsed();
+        if (this.tipEl?.isValid) {
+          setLabel(this.tipEl, this.elapsed >= 10 ? '仍在搜索，请稍候...' : '正在寻找合适的对手...');
+        }
         this.poll(ctx);
       } catch (e) {
         this.polling = false;
@@ -75,23 +143,29 @@ export class MatchScreen implements Screen {
     }, 1000);
   }
 
+  private updateElapsed(): void {
+    if (!this.timeEl?.isValid) return;
+    const minutes = Math.floor(this.elapsed / 60).toString().padStart(2, '0');
+    const seconds = (this.elapsed % 60).toString().padStart(2, '0');
+    setLabel(this.timeEl, `${minutes}:${seconds}`);
+  }
+
   private async cancel(ctx: ScreenCtx): Promise<void> {
     this.polling = false;
     if (this.matchId) {
       try {
         await ctx.api.matchCancel(this.matchId);
       } catch {
-        /* 取消失败忽略 */
+        /* 取消失败忽略。 */
       }
     }
     ctx.go('lobby');
   }
 
   update(dt: number): void {
-    if (this.spinner?.isValid) {
-      const r = this.spinner.eulerAngles;
-      this.spinner.setRotationFromEuler(0, 0, r.z - dt * 240);
-    }
+    if (!this.spinner?.isValid) return;
+    const r = this.spinner.eulerAngles;
+    this.spinner.setRotationFromEuler(0, 0, r.z - dt * 150);
   }
 
   unmount(): void {

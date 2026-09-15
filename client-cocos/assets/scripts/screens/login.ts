@@ -1,33 +1,89 @@
-// 登录屏幕：游客登录。
+// 登录屏幕：单主卡片，保留游戏品牌感但避免双栏过度设计。
 
-import { Node } from 'cc';
+import { Node, Sprite, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
 import { logger } from '../core/logger';
 import { storage, StorageKeys } from '../core/storage';
 import { ApiError } from '../net/http';
-import { button, card, centerIn, fullBackground, label, setLabel, uiNode } from '../ui/builder';
-import { theme } from '../ui/theme';
+import {
+  button,
+  centerIn,
+  divider,
+  fullBackground,
+  label,
+  panel,
+  pill,
+  setLabel,
+  uiNode,
+} from '../ui/builder';
+import { screenLayer } from '../ui/layout';
+import { circleTexture, ringTexture } from '../ui/texgen';
+import { theme, withAlpha } from '../ui/theme';
 
 export class LoginScreen implements Screen {
   private node: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('login-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'login-screen');
     fullBackground(this.node);
 
     let busy = false;
     const btn = button('游客登录', () => {
       if (busy) return;
       void this.login(ctx, btn, () => (busy = true), () => (busy = false));
-    });
-    const c = card([
-      label('吞噬细胞', { fontSize: theme.titleSize }),
-      label('2D 实时多人对战 · Cocos', { fontSize: theme.smallSize + 4, color: theme.muted }),
+    }, { width: 300, height: 60 });
+
+    const logo = this.logo();
+    const c = panel([
+      logo,
+      label('吞噬细胞', { width: 360, fontSize: theme.heroSize }),
+      label('CELLULAR PHAGOCYTE', {
+        width: 360,
+        fontSize: theme.smallSize + 1,
+        color: theme.primaryBright,
+      }),
+      label('移动 · 吞噬 · 分裂 · 生存到最后', {
+        width: 360,
+        fontSize: theme.smallSize + 2,
+        color: theme.muted,
+      }),
+      divider(330),
       btn,
-      label('点击进入，无需注册', { fontSize: theme.smallSize, color: theme.muted }),
-    ]);
+      pill('无需注册 · 进度自动保存', {
+        width: 230,
+        height: 30,
+        color: withAlpha(theme.secondary, 190),
+        textColor: theme.muted,
+      }),
+    ], 460, 10, 28, { height: 500, color: theme.cardStrong });
     centerIn(this.node, c);
+  }
+
+  private logo(): Node {
+    const root = uiNode('login-logo', 124, 124);
+    const ring = root.addComponent(Sprite);
+    ring.spriteFrame = ringTexture();
+    ring.sizeMode = Sprite.SizeMode.CUSTOM;
+    ring.color = withAlpha(theme.primaryBright, 170);
+    root.getComponent(UITransform)!.setContentSize(124, 124);
+
+    const cell = uiNode('login-cell', 92, 92);
+    const cellSp = cell.addComponent(Sprite);
+    cellSp.spriteFrame = circleTexture();
+    cellSp.sizeMode = Sprite.SizeMode.CUSTOM;
+    cellSp.color = theme.primary;
+    cell.getComponent(UITransform)!.setContentSize(92, 92);
+    root.addChild(cell);
+
+    const nucleus = uiNode('login-nucleus', 28, 28);
+    const nucleusSp = nucleus.addComponent(Sprite);
+    nucleusSp.spriteFrame = circleTexture();
+    nucleusSp.sizeMode = Sprite.SizeMode.CUSTOM;
+    nucleusSp.color = theme.accent;
+    nucleus.getComponent(UITransform)!.setContentSize(28, 28);
+    nucleus.setPosition(14, 14, 0);
+    root.addChild(nucleus);
+    return root;
   }
 
   private async login(
@@ -37,7 +93,7 @@ export class LoginScreen implements Screen {
     unlock: () => void,
   ): Promise<void> {
     lock();
-    setLabel(btn.children[0], '登录中...');
+    setLabel(btn.children[0], '正在进入...');
     try {
       let deviceId = storage.get(StorageKeys.DeviceId);
       if (!deviceId) {

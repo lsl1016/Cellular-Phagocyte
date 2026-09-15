@@ -1,59 +1,85 @@
-// 战绩屏幕：分页展示个人历史对局，并显示统计概览。
+// 战绩屏幕：轻量统计胶囊 + 对局列表，减少大块卡片。
 
-import { Node } from 'cc';
+import { Node, UITransform } from 'cc';
 import type { Screen, ScreenCtx } from '../app/context';
 import type { RecordEntry } from '../core/protocol/http-models';
 import {
   button,
-  card,
   centerIn,
   clearChildren,
-  column,
   fullBackground,
   label,
+  panel,
+  pill,
   row,
   setLabel,
   uiNode,
 } from '../ui/builder';
-import { theme } from '../ui/theme';
+import { screenLayer } from '../ui/layout';
+import { theme, withAlpha } from '../ui/theme';
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 6;
 
 export class RecordsScreen implements Screen {
   private node: Node | null = null;
   private page = 1;
-  private summaryEl: Node | null = null;
   private listEl: Node | null = null;
   private pagerEl: Node | null = null;
 
   async mount(ctx: ScreenCtx): Promise<void> {
-    this.node = uiNode('records-screen');
-    ctx.root.addChild(this.node);
+    this.node = screenLayer(ctx.root, 'records-screen');
     fullBackground(this.node);
 
-    this.summaryEl = label('加载统计中...', { color: theme.muted });
-    this.listEl = column([]);
-    this.pagerEl = row([]);
+    const total = pill('总局数 --', { width: 116 });
+    const first = pill('冠军 --', {
+      width: 116,
+      color: withAlpha(theme.warning, 32),
+      textColor: theme.warning,
+    });
+    const top3 = pill('Top3 --', {
+      width: 116,
+      color: withAlpha(theme.accent, 26),
+      textColor: theme.accent,
+    });
+    const best = pill('最高分 --', {
+      width: 126,
+      color: withAlpha(theme.primary, 36),
+      textColor: theme.primaryBright,
+    });
+    const mass = pill('最大质量 --', { width: 136 });
 
-    const c = card([
-      label('战绩', { fontSize: theme.titleSize }),
-      this.summaryEl,
+    this.listEl = uiNode('records-list', 650, 270);
+    this.pagerEl = uiNode('records-pager', 390, 46);
+
+    const c = panel([
+      label('战绩', { width: 650, fontSize: theme.titleSize, align: 'left' }),
+      label('最近对局与奖励记录', {
+        width: 650,
+        fontSize: theme.smallSize + 1,
+        color: theme.muted,
+        align: 'left',
+      }),
+      row([total, first, top3, best, mass], 8),
       this.listEl,
       this.pagerEl,
-      button('返回大厅', () => ctx.go('lobby'), { secondary: true }),
-    ], 520);
+      button('返回大厅', () => ctx.go('lobby'), {
+        variant: 'secondary',
+        width: 170,
+        height: 46,
+      }),
+    ], 720, 10, 28, { height: 550, color: theme.cardStrong });
     centerIn(this.node, c);
 
     try {
       const s = await ctx.api.recordSummary();
-      if (!this.summaryEl?.isValid) return;
-      setLabel(
-        this.summaryEl,
-        `总局数 ${s.totalGames} · 冠军 ${s.firstPlaceCount} · Top3 ${s.top3Count} · ` +
-        `最高分 ${s.bestScore} · 最大质量 ${s.maxMass}`,
-      );
+      if (!this.node?.isValid) return;
+      setLabel(total.children[0], `总局数 ${s.totalGames}`);
+      setLabel(first.children[0], `冠军 ${s.firstPlaceCount}`);
+      setLabel(top3.children[0], `Top3 ${s.top3Count}`);
+      setLabel(best.children[0], `最高分 ${s.bestScore}`);
+      setLabel(mass.children[0], `最大质量 ${s.maxMass}`);
     } catch {
-      if (this.summaryEl?.isValid) setLabel(this.summaryEl, '统计加载失败');
+      /* 统计失败不阻塞列表。 */
     }
 
     await this.loadPage(ctx);
@@ -62,63 +88,113 @@ export class RecordsScreen implements Screen {
   private async loadPage(ctx: ScreenCtx): Promise<void> {
     if (!this.listEl?.isValid || !this.pagerEl?.isValid) return;
     clearChildren(this.listEl);
-    this.listEl.addChild(label('加载中...', { color: theme.muted }));
+    this.listEl.addChild(label('正在加载最近对局...', { width: 650, color: theme.muted }));
     try {
       const data = await ctx.api.records(this.page, PAGE_SIZE);
       if (!this.listEl?.isValid) return;
       clearChildren(this.listEl);
       if (data.list.length === 0) {
-        this.listEl.addChild(label('暂无战绩，先去玩一局吧', { color: theme.muted }));
+        this.listEl.addChild(label('暂无战绩，先去完成一局经典模式吧', {
+          width: 650,
+          color: theme.muted,
+        }));
       } else {
-        for (const r of data.list) this.listEl.addChild(this.row(r));
+        const height = this.listEl.getComponent(UITransform)!.height;
+        let y = height / 2 - 22;
+        for (const r of data.list) {
+          const line = this.recordRow(r);
+          line.setPosition(0, y, 0);
+          this.listEl.addChild(line);
+          y -= 42;
+        }
       }
       this.renderPager(ctx, data.total);
     } catch {
       clearChildren(this.listEl!);
-      this.listEl!.addChild(label('战绩加载失败', { color: theme.muted }));
+      this.listEl!.addChild(label('战绩加载失败，请稍后重试', { width: 650, color: theme.danger }));
     }
   }
 
-  private row(r: RecordEntry): Node {
-    const reward =
-      r.status === 'SUCCESS' || r.settlementStatus === 'SUCCESS'
-        ? `+${r.coinReward}金 +${r.expReward}经`
-        : '结算中';
+  private recordRow(r: RecordEntry): Node {
+    const rewardOk = r.status === 'SUCCESS' || r.settlementStatus === 'SUCCESS';
+    const reward = rewardOk ? `+${r.coinReward}金 +${r.expReward}经` : '结算中';
     const time = new Date(r.endTime).toLocaleString();
-    return label(
-      `第${r.rank}/${r.totalPlayers} · ${r.modeName} · ${r.finalScore}分 · ${reward} · ${time}`,
-      { width: 464, fontSize: theme.smallSize + 2, align: 'left', color: theme.text },
-    );
+    const rankColor = r.rank === 1 ? theme.warning : r.rank <= 3 ? theme.accent : theme.muted;
+    return panel([
+      row([
+        label(`#${r.rank}/${r.totalPlayers}`, {
+          width: 82,
+          fontSize: theme.smallSize,
+          color: rankColor,
+          align: 'left',
+        }),
+        label(r.modeName, {
+          width: 98,
+          fontSize: theme.smallSize,
+          align: 'left',
+        }),
+        label(`${r.finalScore} 分`, {
+          width: 92,
+          fontSize: theme.smallSize,
+          color: theme.primaryBright,
+          align: 'left',
+        }),
+        label(reward, {
+          width: 128,
+          fontSize: theme.smallSize,
+          color: rewardOk ? theme.accent : theme.muted,
+          align: 'left',
+        }),
+        label(time, {
+          width: 188,
+          fontSize: theme.microSize + 1,
+          color: theme.subtle,
+          align: 'right',
+        }),
+      ], 6),
+    ], 650, 0, 8, {
+      height: 36,
+      color: withAlpha(theme.cardSoft, 120),
+      borderColor: withAlpha(theme.cardBorder, 70),
+      shadow: false,
+    });
   }
 
   private renderPager(ctx: ScreenCtx, total: number): void {
     if (!this.pagerEl?.isValid) return;
     clearChildren(this.pagerEl);
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    this.pagerEl.addChild(
-      button('上一页', () => {
-        if (this.page > 1) {
-          this.page--;
-          void this.loadPage(ctx);
-        }
-      }, { secondary: true, width: 120, height: 48, disabled: this.page <= 1 }),
-    );
-    this.pagerEl.addChild(label(`${this.page}/${totalPages}`, { width: 80, color: theme.muted }));
-    this.pagerEl.addChild(
-      button('下一页', () => {
-        if (this.page < totalPages) {
-          this.page++;
-          void this.loadPage(ctx);
-        }
-      }, { secondary: true, width: 120, height: 48, disabled: this.page >= totalPages }),
-    );
-    // 手动水平排布（pager 是 row 容器，但子节点动态变化，直接定位）
-    const kids = this.pagerEl.children;
-    let x = -150;
-    for (const k of kids) {
-      k.setPosition(x + 60, 0, 0);
-      x += 140;
-    }
+    const prev = button('上一页', () => {
+      if (this.page > 1) {
+        this.page--;
+        void this.loadPage(ctx);
+      }
+    }, {
+      variant: 'secondary',
+      width: 110,
+      height: 40,
+      fontSize: theme.smallSize,
+      disabled: this.page <= 1,
+    });
+    const current = pill(`${this.page} / ${totalPages}`, {
+      width: 86,
+      height: 32,
+      color: withAlpha(theme.primary, 32),
+      textColor: theme.primaryBright,
+    });
+    const next = button('下一页', () => {
+      if (this.page < totalPages) {
+        this.page++;
+        void this.loadPage(ctx);
+      }
+    }, {
+      variant: 'secondary',
+      width: 110,
+      height: 40,
+      fontSize: theme.smallSize,
+      disabled: this.page >= totalPages,
+    });
+    this.pagerEl.addChild(row([prev, current, next], 12));
   }
 
   unmount(): void {
